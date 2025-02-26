@@ -6,6 +6,20 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildRule section */
+		A1CA29CC2CD3643100DF72FC /* PBXBuildRule */ = {
+			isa = PBXBuildRule;
+			compilerSpec = com.apple.compilers.proxy.script;
+			fileType = pattern.proxy;
+			inputFiles = (
+			);
+			isEditable = 1;
+			outputFiles = (
+			);
+			script = "# Type a script or drag a script file from your workspace to insert its path.\n";
+		};
+/* End PBXBuildRule section */
+
 /* Begin PBXContainerItemProxy section */
 		277FF4442CC0ACBB0052BF75 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -23,15 +37,54 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		A17C3C112CD36AFB00832AE5 /* Copy Files */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 7;
+			files = (
+			);
+			name = "Copy Files";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		277FF4332CC0ACBA0052BF75 /* ProstheticScanner.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ProstheticScanner.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		277FF4432CC0ACBB0052BF75 /* ProstheticScannerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ProstheticScannerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		277FF44D2CC0ACBB0052BF75 /* ProstheticScannerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ProstheticScannerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		A13E20122CCCB42200785837 /* Exceptions for "ProstheticScanner" folder in "ProstheticScanner" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+				scan.air,
+				scan.metallib,
+			);
+			target = 277FF4322CC0ACBA0052BF75 /* ProstheticScanner */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+		A17C3C172CD36C3200832AE5 /* Exceptions for "ProstheticScanner" folder in "Copy Files" phase from "ProstheticScanner" target */ = {
+			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
+			buildPhase = A17C3C112CD36AFB00832AE5 /* Copy Files */;
+			membershipExceptions = (
+				scan.metallib,
+			);
+		};
+/* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		277FF4352CC0ACBA0052BF75 /* ProstheticScanner */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A13E20122CCCB42200785837 /* Exceptions for "ProstheticScanner" folder in "ProstheticScanner" target */,
+				A17C3C172CD36C3200832AE5 /* Exceptions for "ProstheticScanner" folder in "Copy Files" phase from "ProstheticScanner" target */,
+			);
 			path = ProstheticScanner;
 			sourceTree = "<group>";
 		};
@@ -102,8 +155,10 @@
 				277FF42F2CC0ACBA0052BF75 /* Sources */,
 				277FF4302CC0ACBA0052BF75 /* Frameworks */,
 				277FF4312CC0ACBA0052BF75 /* Resources */,
+				A17C3C112CD36AFB00832AE5 /* Copy Files */,
 			);
 			buildRules = (
+				A1CA29CC2CD3643100DF72FC /* PBXBuildRule */,
 			);
 			dependencies = (
 			);
@@ -399,6 +454,8 @@
 				DEVELOPMENT_TEAM = 565C7GFRWJ;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ProstheticScanner/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "This app needs camera access for 3D scanning ";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -428,6 +485,8 @@
 				DEVELOPMENT_TEAM = 565C7GFRWJ;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ProstheticScanner/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "This app needs camera access for 3D scanning ";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
