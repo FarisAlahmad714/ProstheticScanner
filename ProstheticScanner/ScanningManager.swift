@@ -413,7 +413,7 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
                 }
                 
                 // Unproject point to 3D space
-                let pointPos = self.unprojectPoint(x: x, y: y, depth: depth, intrinsics: frame.camera.intrinsics, viewMatrix: frame.camera.viewMatrix(for: .geometry))
+                let pointPos = self.unprojectPoint(x: x, y: y, depth: depth, intrinsics: frame.camera.intrinsics, viewMatrix: frame.camera.viewMatrix())
                 
                 // Skip points that are too far
                 if self.capturedPoints.count > 0 {
