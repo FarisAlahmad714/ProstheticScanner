@@ -68,7 +68,7 @@ struct MeshDisplayView: View {
             // Adjust material to make it visible
             let material = SCNMaterial()
             material.diffuse.contents = UIColor.white
-            material.lightingModel = .physicallyBased
+            material.lightingModel = .phong
             scnNode.geometry?.firstMaterial = material
             
             // Center the mesh
