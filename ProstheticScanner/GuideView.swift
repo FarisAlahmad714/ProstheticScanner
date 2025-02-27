@@ -1,129 +1,67 @@
-
 import SwiftUI
 
 struct GuideView: View {
     @Binding var showGuide: Bool
-    @State private var currentStep = 1
     
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.8) // Dark background
-                .edgesIgnoringSafeArea(.all)
+        VStack(spacing: 20) {
+            Text("3D Prosthetic Scanner")
+                .font(.largeTitle)
+                .fontWeight(.bold)
             
-            VStack {
-                Text("3D Scanning Guide")
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
-                    .foregroundColor(.white)
-                    .padding()
-                
-                TabView(selection: $currentStep) {
-                    GuideStepView(
-                        step: 1,
-                        title: "Prepare the Environment",
-                        description: "Ensure good lighting and remove any reflective or moving objects from the scene.",
-                        imageName: "lightbulb.fill"
-                    )
-                    .tag(1)
-                    
-                    GuideStepView(
-                        step: 2,
-                        title: "Position the Device",
-                        description: "Hold your device steady and aim at the object you want to scan. Keep a distance of about 1-2 feet.",
-                        imageName: "viewfinder"
-                    )
-                    .tag(2)
-                    
-                    GuideStepView(
-                        step: 3,
-                        title: "Start Scanning",
-                        description: "Tap 'Start Scanning' and slowly move around the object. Try to capture all angles.",
-                        imageName: "camera.fill"
-                    )
-                    .tag(3)
-                    
-                    GuideStepView(
-                        step: 4,
-                        title: "Complete the Scan",
-                        description: "Once you've captured all angles, tap 'Stop Scanning' and wait for processing to complete.",
-                        imageName: "checkmark.circle.fill"
-                    )
-                    .tag(4)
-                }
-                .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
-                .padding(.bottom)
-                
-                // Progress indicators
-                HStack(spacing: 8) {
-                    ForEach(1...4, id: \.self) { step in
-                        Circle()
-                            .fill(currentStep == step ? Color.blue : Color.gray)
-                            .frame(width: 8, height: 8)
-                    }
-                }
-                .padding(.bottom)
-                
-                Button(action: {
-                    if currentStep < 4 {
-                        withAnimation {
-                            currentStep += 1
-                        }
-                    } else {
-                        showGuide = false
-                    }
-                }) {
-                    Text(currentStep < 4 ? "Next" : "Start Scanning")
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.blue)
-                        .cornerRadius(10)
-                }
-                .padding(.horizontal)
-                .padding(.bottom, 30)
-            }
-        }
-    }
-}
-struct GuideStepView: View {
-    let step: Int
-    let title: String
-    let description: String
-    let imageName: String
-    
-    var body: some View {
-        VStack(spacing: 30) {
-            Spacer()
-            
-            Image(systemName: imageName)
-                .resizable()
-                .scaledToFit()
-                .frame(height: 80)
+            Image(systemName: "scanner.fill")
+                .font(.system(size: 60))
                 .foregroundColor(.blue)
-                .padding(.top)
+                .padding()
             
-            VStack(spacing: 20) {
-                Text("Step \(step): \(title)")
-                    .font(.title2)
-                    .fontWeight(.bold)
-                    .foregroundColor(.white)
-                    .multilineTextAlignment(.center)
-                
-                Text(description)
-                    .font(.body)
-                    .foregroundColor(.white)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
-                    .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 15) {
+                GuideStep(number: 1, text: "Position the device 30-50cm from the limb")
+                GuideStep(number: 2, text: "Move slowly around the entire limb to capture all surfaces")
+                GuideStep(number: 3, text: "Maintain consistent lighting and avoid fast movements")
+                GuideStep(number: 4, text: "Complete the scan when you've covered the entire area")
             }
             .padding()
+            .background(Color(.systemGray6))
+            .cornerRadius(10)
             
-            Spacer()
-            Spacer()
+            Button(action: {
+                showGuide = false
+            }) {
+                Text("Start Scanning")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.blue)
+                    .cornerRadius(10)
+            }
+            .padding(.horizontal, 40)
+            .padding(.top, 20)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.clear)
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(20)
+        .shadow(radius: 10)
+        .padding()
+    }
+}
+
+struct GuideStep: View {
+    let number: Int
+    let text: String
+    
+    var body: some View {
+        HStack(alignment: .top, spacing: 15) {
+            Text("\(number)")
+                .font(.headline)
+                .foregroundColor(.white)
+                .frame(width: 26, height: 26)
+                .background(Color.blue)
+                .clipShape(Circle())
+            
+            Text(text)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

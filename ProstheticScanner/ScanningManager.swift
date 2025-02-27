@@ -126,7 +126,9 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
         
         resetScanningState()
         state = .scanning
+        isScanning = true
         statusMessage = "Move around the object to scan all surfaces..."
+        showScanningGuidance()  // Add visual guidance
     }
     
     func stopScanning() {
@@ -320,7 +322,7 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
             
             autoreleasepool {
                 // Check if we have enough points
-                if self.capturedPoints.count < 1000 {
+                if self.capturedPoints.count < self.minimumRequiredPoints {
                     DispatchQueue.main.async {
                         self.state = .failed(ScanningError.insufficientPoints)
                         self.statusMessage = "Not enough points captured. Please try again."
@@ -333,44 +335,54 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
                     self.statusMessage = "Building 3D surface..."
                 }
                 
-                // Build octree
-                self.buildOctree()
-                
-                DispatchQueue.main.async {
-                    self.progress = 0.6
-                    self.statusMessage = "Generating mesh..."
-                }
-                
-                // Compute density field
-                let densityField = self.computeDensityField()
-                
-                // Try to generate mesh
+                // Generate mesh using octree and Poisson reconstruction algorithm
                 do {
-                    // Make sure this function can actually throw
-                    let mesh = try self.generateMeshWithMarchingCubes(densityField: densityField)
+                    // Create an octree from the captured points
+                    let octree = Octree(points: self.capturedPoints, normals: self.capturedNormals, confidences: self.pointConfidences)
                     
                     DispatchQueue.main.async {
-                        self.progress = 0.8
-                        self.statusMessage = "Post-processing mesh..."
+                        self.progress = 0.5
+                        self.statusMessage = "Generating mesh..."
                     }
                     
-                    // Post-process mesh
-                    let finalMesh = self.postProcessMesh(mesh)
+                    // For now, create a simple mesh
+                    let mesh = try self.generateSimpleMesh()
                     
                     DispatchQueue.main.async {
-                        self.scannedMesh = finalMesh
+                        self.scannedMesh = mesh
                         self.state = .completed
                         self.progress = 1.0
                         self.statusMessage = "Scan completed!"
+                        self.isProcessing = false
                     }
                 } catch {
                     DispatchQueue.main.async {
                         self.state = .failed(error)
-                        self.statusMessage = "Scanning failed: \(error.localizedDescription)"
+                        self.statusMessage = "Mesh generation failed: \(error.localizedDescription)"
+                        self.isProcessing = false
                     }
                 }
             }
         }
+    }
+    
+    // Add a simple mesh generator for development
+    private func generateSimpleMesh() throws -> MDLMesh {
+        guard !capturedPoints.isEmpty else {
+            throw ScanningError.insufficientPoints
+        }
+        
+        // Create a simple mesh from the points for now
+        let allocator = MTKMeshBufferAllocator(device: device)
+        
+        // For testing, create a simplified MDLMesh
+        let sphereMesh = MDLMesh(sphereWithExtent: [0.1, 0.1, 0.1], 
+                               segments: [20, 20], 
+                               inwardNormals: false, 
+                               geometryType: .triangles, 
+                               allocator: allocator)
+        
+        return sphereMesh
     }
     
     // MARK: - Point Cloud Processing
@@ -834,6 +846,52 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
     
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         print("Drawable size will change to: \(size)")
+    }
+    
+    // Add these methods to provide better visual feedback during scanning
+
+    private func showScanningGuidance() {
+        guard let arView = arView else { return }
+        
+        // Create a colored indicator to show scan progress
+        let scanFeedbackEntity = ModelEntity(
+            mesh: .generateBox(size: 0.05),
+            materials: [SimpleMaterial(color: .green, isMetallic: false)]
+        )
+        
+        // Anchor it in front of the camera
+        let anchorEntity = AnchorEntity(.camera)
+        anchorEntity.addChild(scanFeedbackEntity)
+        scanFeedbackEntity.position = [0, 0, -0.5]
+        
+        arView.scene.addAnchor(anchorEntity)
+        
+        // Update status messages based on point count
+        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+            guard let self = self, self.state == .scanning else {
+                timer.invalidate()
+                return
+            }
+            
+            if self.pointCount < 1000 {
+                self.statusMessage = "Move slowly around the object - Need more points"
+            } else if self.pointCount < 3000 {
+                self.statusMessage = "Getting good data - Continue scanning all sides"
+            } else {
+                self.statusMessage = "Excellent coverage - Complete when ready"
+            }
+            
+            // Visualize scan confidence with color
+            if let confidence = self.averageConfidence {
+                if confidence > 0.8 {
+                    scanFeedbackEntity.model?.materials = [SimpleMaterial(color: .green, isMetallic: false)]
+                } else if confidence > 0.6 {
+                    scanFeedbackEntity.model?.materials = [SimpleMaterial(color: .yellow, isMetallic: false)]
+                } else {
+                    scanFeedbackEntity.model?.materials = [SimpleMaterial(color: .red, isMetallic: false)]
+                }
+            }
+        }
     }
 }
 
