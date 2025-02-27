@@ -7,12 +7,27 @@ import CoreImage
 import simd
 import Combine
 
-enum ScanningState {
+enum ScanningState: Equatable {
     case ready
     case scanning
     case processing
     case completed
     case failed(Error)
+    
+    // Custom Equatable implementation to handle Error cases
+    static func == (lhs: ScanningState, rhs: ScanningState) -> Bool {
+        switch (lhs, rhs) {
+        case (.ready, .ready),
+             (.scanning, .scanning),
+             (.processing, .processing),
+             (.completed, .completed):
+            return true
+        case let (.failed(lhsError), .failed(rhsError)):
+            return lhsError.localizedDescription == rhsError.localizedDescription
+        default:
+            return false
+        }
+    }
 }
 
 enum ScanningError: Error {
@@ -304,41 +319,42 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
             guard let self = self else { return }
             
             autoreleasepool {
+                // Check if we have enough points
+                if self.capturedPoints.count < 1000 {
+                    DispatchQueue.main.async {
+                        self.state = .failed(ScanningError.insufficientPoints)
+                        self.statusMessage = "Not enough points captured. Please try again."
+                    }
+                    return
+                }
+                
+                DispatchQueue.main.async {
+                    self.progress = 0.3
+                    self.statusMessage = "Building 3D surface..."
+                }
+                
+                // Build octree
+                self.buildOctree()
+                
+                DispatchQueue.main.async {
+                    self.progress = 0.6
+                    self.statusMessage = "Generating mesh..."
+                }
+                
+                // Compute density field
+                let densityField = self.computeDensityField()
+                
+                // Try to generate mesh
                 do {
-                    // Check if we have enough points
-                    if self.capturedPoints.count < 1000 {
-                        DispatchQueue.main.async {
-                            self.state = .failed(ScanningError.insufficientPoints)
-                            self.statusMessage = "Not enough points captured. Please try again."
-                        }
-                        return
-                    }
-                    
-                    // 1. Organize points in octree
-                    self.buildOctree()
-                    
-                    DispatchQueue.main.async {
-                        self.progress = 0.3
-                        self.statusMessage = "Building 3D surface..."
-                    }
-                    
-                    // 2. Poisson surface reconstruction
-                    let densityField = self.computeDensityField()
-                    
-                    DispatchQueue.main.async {
-                        self.progress = 0.6
-                        self.statusMessage = "Generating mesh..."
-                    }
-                    
-                    // 3. Extract mesh using Marching Cubes
-                    let mesh = self.generateMeshWithMarchingCubes(densityField: densityField)
+                    // Make sure this function can actually throw
+                    let mesh = try self.generateMeshWithMarchingCubes(densityField: densityField)
                     
                     DispatchQueue.main.async {
                         self.progress = 0.8
                         self.statusMessage = "Post-processing mesh..."
                     }
                     
-                    // 4. Post-process mesh
+                    // Post-process mesh
                     let finalMesh = self.postProcessMesh(mesh)
                     
                     DispatchQueue.main.async {
@@ -347,7 +363,6 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
                         self.progress = 1.0
                         self.statusMessage = "Scan completed!"
                     }
-                    
                 } catch {
                     DispatchQueue.main.async {
                         self.state = .failed(error)
@@ -465,7 +480,7 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
         return []
     }
     
-    private func generateMeshWithMarchingCubes(densityField: [Float]) -> MDLMesh {
+    private func generateMeshWithMarchingCubes(densityField: [Float]) throws -> MDLMesh {
         // Placeholder for marching cubes implementation
         // In a real app, this would extract a mesh from the density field
         
@@ -653,7 +668,7 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
                         newPoints.append(point3D)
                         
                         // Calculate normal and color
-                        let normal = calculateNormal(for: point3D)
+                        let normal = calculateNormal(at: point3D, frame: frame)
                         newNormals.append(normal)
                         
                         let color = getColorForPoint(at: x, y: y, from: colorBuffer)
