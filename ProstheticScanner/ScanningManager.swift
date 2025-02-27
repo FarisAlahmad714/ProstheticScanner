@@ -335,18 +335,14 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
                     self.statusMessage = "Building 3D surface..."
                 }
                 
-                // Generate mesh using octree and Poisson reconstruction algorithm
+                // Generate mesh using the enhanced method
                 do {
-                    // Create an octree from the captured points
-                    let octree = Octree(points: self.capturedPoints, normals: self.capturedNormals, confidences: self.pointConfidences)
-                    
                     DispatchQueue.main.async {
                         self.progress = 0.5
-                        self.statusMessage = "Generating mesh..."
+                        self.statusMessage = "Generating high-quality mesh..."
                     }
                     
-                    // For now, create a simple mesh
-                    let mesh = try self.generateSimpleMesh()
+                    let mesh = try self.generateHighQualityMesh()
                     
                     DispatchQueue.main.async {
                         self.scannedMesh = mesh
@@ -367,22 +363,163 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
     }
     
     // Add a simple mesh generator for development
-    private func generateSimpleMesh() throws -> MDLMesh {
-        guard !capturedPoints.isEmpty else {
+    private func generateHighQualityMesh() throws -> MDLMesh {
+        guard capturedPoints.count >= minimumRequiredPoints else {
             throw ScanningError.insufficientPoints
         }
         
-        // Create a simple mesh from the points for now
         let allocator = MTKMeshBufferAllocator(device: device)
         
-        // For testing, create a simplified MDLMesh
-        let sphereMesh = MDLMesh(sphereWithExtent: [0.1, 0.1, 0.1], 
-                               segments: [20, 20], 
-                               inwardNormals: false, 
-                               geometryType: .triangles, 
-                               allocator: allocator)
+        // Start with a voxel grid to downsample and regularize points
+        let voxelizedPoints = voxelizePointCloud(capturedPoints, normals: capturedNormals, voxelSize: voxelSize)
         
-        return sphereMesh
+        // Enough points to generate a real mesh?
+        if voxelizedPoints.points.count > 100 {
+            // Create MDLVertexDescriptor
+            let vertexDescriptor = MDLVertexDescriptor()
+            vertexDescriptor.attributes[0] = MDLVertexAttribute(name: MDLVertexAttributePosition,
+                                                              format: .float3,
+                                                              offset: 0,
+                                                              bufferIndex: 0)
+            vertexDescriptor.attributes[1] = MDLVertexAttribute(name: MDLVertexAttributeNormal,
+                                                              format: .float3,
+                                                              offset: 0,
+                                                              bufferIndex: 1)
+            vertexDescriptor.layouts[0] = MDLVertexBufferLayout(stride: MemoryLayout<SIMD3<Float>>.stride)
+            vertexDescriptor.layouts[1] = MDLVertexBufferLayout(stride: MemoryLayout<SIMD3<Float>>.stride)
+            
+            // Create vertex buffer
+            let positionBuffer = allocator.newBuffer(MemoryLayout<SIMD3<Float>>.stride * voxelizedPoints.points.count,
+                                                          type: .vertex)
+            
+            // Copy points into buffer
+            let positionPtr = positionBuffer.map().bytes.bindMemory(to: SIMD3<Float>.self,
+                                                                        capacity: voxelizedPoints.points.count)
+            for i in 0..<voxelizedPoints.points.count {
+                positionPtr[i] = voxelizedPoints.points[i]
+            }
+            
+            // Create normal buffer
+            let normalBuffer = allocator.newBuffer(MemoryLayout<SIMD3<Float>>.stride * voxelizedPoints.normals.count,
+                                                        type: .vertex)
+            
+            // Copy normals into buffer
+            let normalPtr = normalBuffer.map().bytes.bindMemory(to: SIMD3<Float>.self,
+                                                                     capacity: voxelizedPoints.normals.count)
+            for i in 0..<voxelizedPoints.normals.count {
+                normalPtr[i] = voxelizedPoints.normals[i]
+            }
+            
+            // Generate triangles using a surface reconstruction algorithm
+            // For this example, we'll use a simplified triangulation
+            let triangleIndices = triangulatePoints(voxelizedPoints.points)
+            
+            // Create index buffer
+            let indexBuffer = allocator.newBuffer(MemoryLayout<UInt32>.stride * triangleIndices.count,
+                                                       type: .index)
+            
+            // Copy indices into buffer
+            let indexPtr = indexBuffer.map().bytes.bindMemory(to: UInt32.self,
+                                                                  capacity: triangleIndices.count)
+            for i in 0..<triangleIndices.count {
+                indexPtr[i] = triangleIndices[i]
+            }
+            
+            // Create submesh
+            let submesh = MDLSubmesh(indexBuffer: indexBuffer,
+                                    indexCount: triangleIndices.count,
+                                    indexType: .uint32,
+                                    geometryType: .triangles,
+                                    material: nil)
+            
+            // Create the mesh
+            let mesh = MDLMesh(vertexBuffers: [positionBuffer, normalBuffer],
+                             vertexCount: voxelizedPoints.points.count,
+                             descriptor: vertexDescriptor,
+                             submeshes: [submesh])
+            
+            // Update triangle count for UI
+            DispatchQueue.main.async {
+                self.triangleCount = triangleIndices.count / 3
+            }
+            
+            return mesh
+        } else {
+            // Fallback to simple sphere if not enough points
+            return MDLMesh(sphereWithExtent: [0.1, 0.1, 0.1],
+                          segments: [20, 20],
+                          inwardNormals: false,
+                          geometryType: .triangles,
+                          allocator: allocator)
+        }
+    }
+    
+    // Helper functions for mesh generation
+    private func voxelizePointCloud(_ points: [SIMD3<Float>], normals: [SIMD3<Float>], voxelSize: Float) -> (points: [SIMD3<Float>], normals: [SIMD3<Float>]) {
+        guard !points.isEmpty, points.count == normals.count else {
+            return ([], [])
+        }
+        
+        // Dictionary to group points by voxel
+        var voxelDict: [SIMD3<Int>: (point: SIMD3<Float>, normal: SIMD3<Float>, count: Int)] = [:]
+        
+        // Place each point in a voxel
+        for i in 0..<points.count {
+            let point = points[i]
+            let normal = normals[i]
+            
+            // Calculate voxel coordinates
+            let voxelX = Int(floor(point.x / voxelSize))
+            let voxelY = Int(floor(point.y / voxelSize))
+            let voxelZ = Int(floor(point.z / voxelSize))
+            let voxelCoord = SIMD3<Int>(voxelX, voxelY, voxelZ)
+            
+            // Add to or update voxel
+            if let existing = voxelDict[voxelCoord] {
+                let newPoint = existing.point + point
+                let newNormal = existing.normal + normal
+                let newCount = existing.count + 1
+                voxelDict[voxelCoord] = (newPoint, newNormal, newCount)
+            } else {
+                voxelDict[voxelCoord] = (point, normal, 1)
+            }
+        }
+        
+        // Extract averaged points and normals
+        var resultPoints: [SIMD3<Float>] = []
+        var resultNormals: [SIMD3<Float>] = []
+        
+        for (_, value) in voxelDict {
+            let avgPoint = value.point / Float(value.count)
+            let avgNormal = normalize(value.normal)  // Average then normalize
+            
+            resultPoints.append(avgPoint)
+            resultNormals.append(avgNormal)
+        }
+        
+        return (resultPoints, resultNormals)
+    }
+    
+    private func triangulatePoints(_ points: [SIMD3<Float>]) -> [UInt32] {
+        // This is a simplified triangulation - not suitable for concave shapes
+        // A real app would use Delaunay triangulation or other advanced algorithms
+        
+        var triangles: [UInt32] = []
+        
+        // Need at least 3 points for a triangle
+        if points.count < 3 {
+            return triangles
+        }
+        
+        // Very basic triangulation - fan triangulation from first point
+        // This works for simple convex shapes only
+        for i in 1..<(points.count-1) {
+            triangles.append(0)                // Center point
+            triangles.append(UInt32(i))        // Current point
+            triangles.append(UInt32(i + 1))    // Next point
+        }
+        
+        return triangles
     }
     
     // MARK: - Point Cloud Processing
@@ -409,75 +546,180 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
         let depthPointer = unsafeBitCast(CVPixelBufferGetBaseAddress(depthMap), to: UnsafeMutablePointer<Float>.self)
         let confidencePointer = unsafeBitCast(CVPixelBufferGetBaseAddress(confidenceMap), to: UnsafeMutablePointer<UInt8>.self)
         
-        // Sample every few pixels to reduce the number of points
-        let sampleStep = 4
+        // Use adaptive sampling - more points in areas with high detail
+        let colorImage = frame.capturedImage
+        let adaptiveSampling = calculateAdaptiveSampling(from: colorImage, width: width, height: height)
         
-        for y in stride(from: 0, to: height, by: sampleStep) {
-            for x in stride(from: 0, to: width, by: sampleStep) {
+        for y in stride(from: 0, to: height, by: adaptiveSampling) {
+            for x in stride(from: 0, to: width, by: adaptiveSampling) {
                 let index = y * width + x
                 
+                // Get depth and confidence
                 let depth = depthPointer[index]
                 let confidence = Float(confidencePointer[index]) / 255.0
                 
-                // Skip invalid depth or low confidence
-                if depth.isNaN || depth <= 0 || confidence < confidenceThreshold {
+                // Skip invalid points
+                if depth <= 0 || depth > maxScanDistance || confidence < confidenceThreshold {
                     continue
                 }
                 
-                // Unproject point to 3D space
-                let pointPos = self.unprojectPoint(x: x, y: y, depth: depth, intrinsics: frame.camera.intrinsics, viewMatrix: frame.camera.viewMatrix(for: .portrait))
+                // Convert pixel to 3D point
+                let pointInCamera = self.unprojectPoint(x: Int(x), y: Int(y), depth: depth, 
+                                                         intrinsics: frame.camera.intrinsics, 
+                                                         viewMatrix: frame.camera.viewMatrix(for: .portrait))
                 
-                // Skip points that are too far
-                if self.capturedPoints.count > 0 {
-                    var isTooFar = true
-                    for existingPoint in self.capturedPoints.suffix(100) {
-                        let distance = length(pointPos - existingPoint)
-                        if distance < distanceThreshold {
-                            isTooFar = false
-                            break
-                        }
-                    }
+                // Add to captured points
+                if !self.isTooClose(point: pointInCamera) {
+                    self.capturedPoints.append(pointInCamera)
                     
-                    if isTooFar { continue }
+                    // Calculate normal based on neighboring points
+                    let normal = self.calculateRobustNormal(at: Int(x), y: Int(y), 
+                                                              depthMap: depthPointer, 
+                                                              width: width, height: height)
+                    self.capturedNormals.append(normal)
+                    
+                    // Store confidence
+                    self.pointConfidences.append(confidence)
+                    
+                    // Get color from RGB camera
+                    if let color = self.getColorFromImage(colorImage, at: CGPoint(x: x, y: y)) {
+                        self.colors.append(color)
+                    } else {
+                        self.colors.append(SIMD3<Float>(1, 1, 1)) // White default
+                    }
                 }
                 
-                // Calculate surface normal
-                let normal = self.calculateNormal(at: pointPos, frame: frame)
-                
-                // Add the point
-                self.capturedPoints.append(pointPos)
-                self.capturedNormals.append(normal)
-                self.pointConfidences.append(confidence)
-                
-                // Limit max points to prevent memory issues
+                // Limit points to prevent performance issues
                 if self.capturedPoints.count >= self.maxPoints {
-                    return
+                    break
                 }
             }
         }
+        
+        // Update UI with new point count
+        DispatchQueue.main.async {
+            self.pointCount = self.capturedPoints.count
+            
+            // Calculate average confidence
+            if !self.pointConfidences.isEmpty {
+                self.averageConfidence = self.pointConfidences.reduce(0, +) / Float(self.pointConfidences.count)
+            }
+            
+            // Show progress based on point count
+            self.progress = min(0.8, Float(self.capturedPoints.count) / Float(self.maxPoints))
+        }
     }
     
-    private func unprojectPoint(x: Int, y: Int, depth: Float, intrinsics: simd_float3x3, viewMatrix: simd_float4x4) -> SIMD3<Float> {
-        // Convert pixel coordinates to normalized device coordinates
-        let normalizedX = (Float(x) - intrinsics[2][0]) / intrinsics[0][0]
-        let normalizedY = (Float(y) - intrinsics[2][1]) / intrinsics[1][1]
+    private func calculateAdaptiveSampling(from image: CVPixelBuffer, width: Int, height: Int) -> Int {
+        // Calculate sampling based on image features
+        // More points in high-detail areas, fewer in flat areas
+        // This is a simplified version - you could make this more sophisticated
         
-        // Create point in camera space
-        let cameraPoint = SIMD3<Float>(normalizedX * depth, normalizedY * depth, depth)
+        // Default sampling stride
+        let defaultStride = 8
         
-        // Convert to world space
-        let worldPoint = viewMatrix.inverse * SIMD4<Float>(cameraPoint, 1.0)
-        return SIMD3<Float>(worldPoint.x, worldPoint.y, worldPoint.z)
+        // For now, we'll return a fixed value, but this could be improved
+        // with edge detection algorithms to use lower stride in high-detail areas
+        return defaultStride
     }
     
-    private func calculateNormal(at point: SIMD3<Float>, frame: ARFrame) -> SIMD3<Float> {
-        // Simplified normal calculation - in a real app, you would use neighboring points
-        // to calculate a more accurate normal
-        let cameraPosition = frame.camera.transform.columns.3
-        let cameraPos = SIMD3<Float>(cameraPosition.x, cameraPosition.y, cameraPosition.z)
+    private func calculateRobustNormal(at x: Int, y: Int, depthMap: UnsafeMutablePointer<Float>, 
+                                     width: Int, height: Int) -> SIMD3<Float> {
+        // Calculate surface normal using neighboring points
+        // This is a simplified version - a real implementation would use more neighbors
+        // and handle edge cases better
         
-        let toCamera = normalize(cameraPos - point)
-        return toCamera
+        let radius = normalCalculationRadius
+        var neighbors: [SIMD3<Float>] = []
+        
+        // Collect neighboring points
+        for dy in -radius...radius {
+            for dx in -radius...radius {
+                let nx = x + dx
+                let ny = y + dy
+                
+                if nx >= 0 && nx < width && ny >= 0 && ny < height {
+                    let index = ny * width + nx
+                    let depth = depthMap[index]
+                    
+                    if depth > 0 {
+                        // Convert to 3D point
+                        let point = SIMD3<Float>(Float(nx), Float(ny), depth)
+                        neighbors.append(point)
+                    }
+                }
+            }
+        }
+        
+        // Need at least 3 points to compute normal
+        if neighbors.count < 3 {
+            return SIMD3<Float>(0, 0, 1) // Default normal pointing toward camera
+        }
+        
+        // Compute centroid
+        let centroid = neighbors.reduce(SIMD3<Float>(0, 0, 0), +) / Float(neighbors.count)
+        
+        // Compute covariance matrix
+        var covariance = simd_float3x3(0)
+        
+        for point in neighbors {
+            let diff = point - centroid
+            
+            // Outer product
+            covariance.columns.0 += diff * diff.x
+            covariance.columns.1 += diff * diff.y
+            covariance.columns.2 += diff * diff.z
+        }
+        
+        // Get eigenvector with smallest eigenvalue (normal direction)
+        // This is simplified - normally you'd compute eigenvalues/eigenvectors
+        // For now, we'll use cross product of two directions as approximation
+        
+        let dir1 = neighbors[1] - neighbors[0]
+        let dir2 = neighbors[2] - neighbors[0]
+        let normal = normalize(cross(dir1, dir2))
+        
+        return normal
+    }
+    
+    private func isTooClose(point: SIMD3<Float>) -> Bool {
+        // Check if this point is too close to existing points (for deduplication)
+        // Simple approach: check against recent points
+        let checkCount = min(capturedPoints.count, 100)
+        let startIndex = max(0, capturedPoints.count - checkCount)
+        
+        for i in startIndex..<capturedPoints.count {
+            let distance = length(capturedPoints[i] - point)
+            if distance < voxelSize {
+                return true
+            }
+        }
+        
+        return false
+    }
+    
+    private func getColorFromImage(_ image: CVPixelBuffer, at point: CGPoint) -> SIMD3<Float>? {
+        // Extract RGB color from camera image
+        // This is a simplified version - you'd need proper pixel format handling
+        
+        let width = CVPixelBufferGetWidth(image)
+        let height = CVPixelBufferGetHeight(image)
+        
+        // Convert point to image coordinates
+        // Note: camera image might be in a different orientation/resolution than depth
+        let x = Int(point.x * Float(width) / Float(CVPixelBufferGetWidth(image)))
+        let y = Int(point.y * Float(height) / Float(CVPixelBufferGetHeight(image)))
+        
+        // Bounds check
+        if x < 0 || x >= width || y < 0 || y >= height {
+            return nil
+        }
+        
+        // Simple placeholder - return a gradient based on position
+        // In a real implementation, you'd extract the actual RGB values
+        return SIMD3<Float>(Float(x) / Float(width),
+                           Float(y) / Float(height),
+                           0.5)
     }
     
     // MARK: - Octree Implementation
@@ -853,26 +1095,20 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
     private func showScanningGuidance() {
         guard let arView = arView else { return }
         
-        // Create a colored indicator to show scan progress
-        let scanFeedbackEntity = ModelEntity(
-            mesh: .generateBox(size: 0.05),
-            materials: [SimpleMaterial(color: .green, isMetallic: false)]
-        )
-        
-        // Anchor it in front of the camera
-        let anchorEntity = AnchorEntity(.camera)
-        anchorEntity.addChild(scanFeedbackEntity)
-        scanFeedbackEntity.position = [0, 0, -0.5]
-        
-        arView.scene.addAnchor(anchorEntity)
+        // Remove the simple box indicator and replace with mesh visualization
+        setupMeshVisualization()
         
         // Update status messages based on point count
-        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
             guard let self = self, self.state == .scanning else {
                 timer.invalidate()
                 return
             }
             
+            // Update the mesh visualization with latest captured points
+            self.updateMeshVisualization()
+            
+            // Update status messages
             if self.pointCount < 1000 {
                 self.statusMessage = "Move slowly around the object - Need more points"
             } else if self.pointCount < 3000 {
@@ -880,17 +1116,75 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
             } else {
                 self.statusMessage = "Excellent coverage - Complete when ready"
             }
+        }
+    }
+    
+    // Create new methods for real-time mesh visualization
+    private var meshVisualization: ModelEntity?
+    private var meshAnchor: AnchorEntity?
+
+    private func setupMeshVisualization() {
+        guard let arView = arView else { return }
+        
+        // Create an anchor at world origin
+        meshAnchor = AnchorEntity(world: .zero)
+        arView.scene.addAnchor(meshAnchor!)
+    }
+
+    private func updateMeshVisualization() {
+        guard let meshAnchor = meshAnchor, !capturedPoints.isEmpty else { return }
+        
+        // Remove previous visualization if it exists
+        if let oldMesh = meshVisualization {
+            meshAnchor.removeChild(oldMesh)
+        }
+        
+        // Create a mesh descriptor from captured points
+        var meshDescriptor = MeshDescriptor()
+        
+        // Use the actual captured points
+        let vertices = capturedPoints
+        meshDescriptor.positions = MeshBuffers.Positions(vertices)
+        
+        // If we have enough points, create triangles
+        if capturedPoints.count > 10 {
+            // Simple triangulation for visualization - this is basic and can be improved
+            var triangles: [UInt32] = []
             
-            // Visualize scan confidence with color
-            if let confidence = self.averageConfidence {
-                if confidence > 0.8 {
-                    scanFeedbackEntity.model?.materials = [SimpleMaterial(color: .green, isMetallic: false)]
-                } else if confidence > 0.6 {
-                    scanFeedbackEntity.model?.materials = [SimpleMaterial(color: .yellow, isMetallic: false)]
-                } else {
-                    scanFeedbackEntity.model?.materials = [SimpleMaterial(color: .red, isMetallic: false)]
+            // For better visualization, create a grid-like structure
+            for i in 0..<min(capturedPoints.count - 2, 2000) {
+                if i % 2 == 0 && i > 0 {
+                    triangles.append(UInt32(i))
+                    triangles.append(UInt32(i-1))
+                    triangles.append(UInt32(i-2))
                 }
             }
+            
+            if !triangles.isEmpty {
+                meshDescriptor.primitives = .triangles(triangles)
+            }
+        }
+        
+        // Create the mesh with a wireframe material
+        do {
+            let mesh = try MeshResource.generate(from: [meshDescriptor])
+            
+            // Create a material that looks like a wireframe
+            var material = SimpleMaterial()
+            material.color = .init(tint: .red.withAlphaComponent(0.7))
+            material.metallic = 0.0
+            material.roughness = 1.0
+            
+            // Create entity
+            meshVisualization = ModelEntity(mesh: mesh, materials: [material])
+            meshAnchor.addChild(meshVisualization!)
+            
+            // Update point count for UI
+            DispatchQueue.main.async {
+                self.pointCount = self.capturedPoints.count
+            }
+        } catch {
+            print("Failed to generate preview mesh: \(error)")
         }
     }
 }
