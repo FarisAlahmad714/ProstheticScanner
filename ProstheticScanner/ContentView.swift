@@ -1,133 +1,112 @@
 import SwiftUI
+import ARKit
 import RealityKit
 
 struct ContentView: View {
     @StateObject private var scanningManager = ScanningManager()
-    @StateObject private var meshProcessor = MeshProcessor.shared
-    @State private var showGuide = true
-    @State private var currentScreen: ScanScreen = .guide
-    
-    enum ScanScreen {
-        case guide
-        case scanning
-        case processing
-        case meshView
-    }
     
     var body: some View {
         ZStack {
-            switch currentScreen {
-            case .guide:
-                GuideView(showGuide: $showGuide)
-                    .onChange(of: showGuide) { _, _ in
-                        if !showGuide {
-                            currentScreen = .scanning
-                        }
-                    }
+            ARViewContainer(scanningManager: scanningManager)
+                .edgesIgnoringSafeArea(.all)
+            
+            VStack {
+                Spacer()
                 
-            case .scanning:
-                ZStack {
-                    // AR View is the background
-                    ARViewContainer(scanningManager: scanningManager)
-                        .edgesIgnoringSafeArea(.all)
-                    
-                    // Controls overlay
-                    VStack {
-                        Text(scanningManager.statusMessage)
-                            .font(.headline)
-                            .padding()
-                            .background(.ultraThinMaterial)
-                            .cornerRadius(10)
-                        
-                        Spacer()
-                        
-                        VStack {
-                            Button("Start Scanning") {
-                                scanningManager.startScanning()
-                            }
-                            .padding()
-                            .background(.blue)
-                            .foregroundColor(.white)
-                            .cornerRadius(10)
-                            
-                            if scanningManager.state == .scanning {
-                                ProgressView(value: scanningManager.progress)
-                                    .progressViewStyle(LinearProgressViewStyle())
-                                    .padding()
-                                
-                                Button("Complete Scan") {
-                                    completeScan()
-                                }
+                // Status message
+                Text(scanningManager.statusMessage)
+                    .padding()
+                    .background(Color.black.opacity(0.6))
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+                    .padding(.horizontal)
+                
+                // Progress indicator
+                if scanningManager.state == .scanning || scanningManager.state == .processing {
+                    ProgressView(value: scanningManager.progress)
+                        .padding()
+                        .frame(maxWidth: 300)
+                }
+                
+                // Control buttons
+                HStack(spacing: 20) {
+                    switch scanningManager.state {
+                    case .ready:
+                        Button(action: {
+                            scanningManager.startScanning()
+                        }) {
+                            Text("Start Scanning")
                                 .padding()
-                                .background(.green)
+                                .background(Color.blue)
                                 .foregroundColor(.white)
                                 .cornerRadius(10)
+                        }
+                        
+                    case .scanning:
+                        Button(action: {
+                            scanningManager.stopScanning()
+                        }) {
+                            Text("Stop Scanning")
+                                .padding()
+                                .background(Color.red)
+                                .foregroundColor(.white)
+                                .cornerRadius(10)
+                        }
+                        
+                    case .completed:
+                        HStack {
+                            Button(action: {
+                                // Export mesh functionality here
+                            }) {
+                                Text("Export")
+                                    .padding()
+                                    .background(Color.green)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(10)
+                            }
+                            
+                            Button(action: {
+                                scanningManager.reset()
+                            }) {
+                                Text("New Scan")
+                                    .padding()
+                                    .background(Color.blue)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(10)
                             }
                         }
-                        .padding()
-                        .background(.ultraThinMaterial)
-                        .cornerRadius(10)
+                        
+                    case .processing:
+                        Text("Processing...")
+                            .padding()
+                            .background(Color.gray)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                        
+                    case .failed(let error):
+                        VStack {
+                            Text("Error: \(error.localizedDescription)")
+                                .foregroundColor(.red)
+                                .padding()
+                            
+                            Button(action: {
+                                scanningManager.reset()
+                            }) {
+                                Text("Try Again")
+                                    .padding()
+                                    .background(Color.blue)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(10)
+                            }
+                        }
                     }
-                    .padding()
                 }
-                
-            case .processing:
-                ProcessingView(meshProcessor: meshProcessor) { meshData in
-                    currentScreen = .meshView
-                }
-                
-            case .meshView:
-                MeshVisualizationView(
-                    meshData: meshProcessor.meshData,
-                    onExport: exportMesh,
-                    onNewScan: resetScan
-                )
+                .padding()
             }
         }
-    }
-    
-    // Function to complete the scan and move to the processing screen
-    private func completeScan() {
-        scanningManager.stopScanning()  // Stops the scanning process in ScanningManager
-        
-        // Prepare scan data for processing
-        let scanData = ScanData(
-            points: scanningManager.points,
-            normals: scanningManager.normals,
-            confidences: scanningManager.confidences,
-            colors: scanningManager.colors
-        )
-        
-        currentScreen = .processing
-        processScannedData(scanData)
-    }
-    
-    // Process the scanned data by passing it to MeshProcessor for mesh generation
-    private func processScannedData(_ scanData: ScanData) {
-        meshProcessor.processScanData(scanData) { result in
-            switch result {
-            case .success:
-                currentScreen = .meshView
-            case .failure(let error):
-                print("Mesh generation failed: \(error)")
-            }
-        }
-    }
-    
-    // Function to handle exporting the mesh data
-    private func exportMesh() {
-        print("Mesh export function called.")
-    }
-    
-    // Function to reset both scanning and mesh processing states
-    private func resetScan() {
-        scanningManager.reset()
-        meshProcessor.reset()
-        currentScreen = .scanning
     }
 }
 
-// Add ARViewContainer right after ContentView
 struct ARViewContainer: UIViewRepresentable {
     var scanningManager: ScanningManager
     
@@ -140,7 +119,8 @@ struct ARViewContainer: UIViewRepresentable {
     func updateUIView(_ uiView: ARView, context: Context) {}
 }
 
-// Preview provider if needed
-#Preview {
-    ContentView()
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        ContentView()
+    }
 }
