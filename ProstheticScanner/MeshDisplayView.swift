@@ -103,34 +103,31 @@ struct MeshDisplayView: View {
         let scene = SCNScene()
         
         if let mesh = scanningManager.scannedMesh {
-            do {
-                // Create an MDL asset from the mesh
-                let asset = MDLAsset()
-                asset.add(mesh)
+            // Create an MDL asset from the mesh
+            let asset = MDLAsset()
+            asset.add(mesh)
+            
+            // Convert to SCNScene - using non-throwing initializer
+            guard let tempScene = SCNScene(mdlAsset: asset) else {
+                print("Failed to create scene from asset")
+                createFallbackSphere(in: scene)
+                return scene
+            }
+            
+            // Extract the node
+            if let meshNode = tempScene.rootNode.childNodes.first {
+                // Apply material based on display mode
+                applyMaterial(to: meshNode, mode: displayMode)
                 
-                // Convert to SCNScene
-                guard let tempScene = SCNScene(mdlAsset: asset) else {
-                    print("Failed to create scene from asset")
-                    createFallbackSphere(in: scene)
-                    return scene
-                }
+                // Add to our scene
+                scene.rootNode.addChildNode(meshNode)
                 
-                // Extract the node
-                if let meshNode = tempScene.rootNode.childNodes.first {
-                    // Apply material based on display mode
-                    applyMaterial(to: meshNode, mode: displayMode)
-                    
-                    // Add to our scene
-                    scene.rootNode.addChildNode(meshNode)
-                    
-                    // Add measurement indicators if needed
-                    if showMeasurements {
-                        addMeasurementsToScene(scene, for: mesh)
-                    }
+                // Add measurement indicators if needed
+                if showMeasurements {
+                    addMeasurementsToScene(scene, for: mesh)
                 }
-            } catch {
-                print("Failed to convert mesh: \(error)")
-                // Fall back to a simple sphere
+            } else {
+                print("No nodes found in converted scene")
                 createFallbackSphere(in: scene)
             }
         } else {
