@@ -5,11 +5,32 @@ import MetalKit
 import Accelerate
 import CoreImage
 import simd
+import Combine
+
+enum ScanningState {
+    case ready
+    case scanning
+    case processing
+    case completed
+    case failed(Error)
+}
+
+enum ScanningError: Error {
+    case insufficientPoints
+    case processingTimeout
+    case meshGenerationFailed
+    case sessionInterrupted
+    case unknown
+}
 
 class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDelegate {
     static let shared = ScanningManager()
     
     // MARK: - Published Properties
+    @Published var state: ScanningState = .ready
+    @Published var progress: Float = 0.0
+    @Published var statusMessage: String = "Ready to scan"
+    @Published var scannedMesh: MDLMesh?
     @Published var isScanning = false
     @Published var isProcessing = false
     @Published var scanningMessage = "Position device and tap 'Start Scanning'"
@@ -43,7 +64,13 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
     private var meshRenderer: MeshRenderer?
     private var currentMeshVertices: [SIMD3<Float>] = []
     private var currentMeshNormals: [SIMD3<Float>] = []
-    // Additional setup or functions here...
+    private var session: ARSession { arView?.session ?? ARSession() }
+    private var capturedPoints: [SIMD3<Float>] = []
+    private var capturedNormals: [SIMD3<Float>] = []
+    private var pointConfidences: [Float] = []
+    private var octree: Octree?
+    private var processingQueue = DispatchQueue(label: "com.prostheticscanner.processing", qos: .userInitiated)
+    private var cancellables = Set<AnyCancellable>()
     
     // MARK: - Scanning Parameters
     private let minimumConfidence: Float = 0.7
@@ -59,8 +86,49 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
     private var lastCaptureTime: TimeInterval = 0
     private let minimumCaptureInterval: TimeInterval = 0.1
     private let voxelSize: Float = 0.01
+    private let confidenceThreshold: Float = 0.5
+    private let distanceThreshold: Float = 0.01  // 1cm
+    private let captureFrequency = 10  // Frames
+    private let processingTimeout: TimeInterval = 60.0  // 1 minute
+    private var frameCount = 0
+    
+    // MARK: - Initialization
+    
+    override init() {
+        super.init()
+        setupMetal()
+    }
+    
+    // MARK: - Public Methods
+    
+    func setup(arView: ARView) {
+        self.arView = arView
+        setupARSession()
+    }
+    
+    func startScanning() {
+        guard state == .ready else { return }
+        
+        resetScanningState()
+        state = .scanning
+        statusMessage = "Move around the object to scan all surfaces..."
+    }
+    
+    func stopScanning() {
+        guard state == .scanning else { return }
+        
+        state = .processing
+        statusMessage = "Processing captured data..."
+        
+        processMeshGeneration()
+    }
     
     func reset() {
+        resetScanningState()
+        setupARSession()
+        state = .ready
+        statusMessage = "Ready to scan"
+        progress = 0.0
         isScanning = false
         isProcessing = false
         scanningMessage = "Position device and tap 'Start Scanning'"
@@ -218,113 +286,91 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
         arView.session.delegate = self
     }
     
+    // MARK: - Private Methods
     
-    override init() {
-        super.init()
-        setupMetal()
+    private func resetScanningState() {
+        capturedPoints = []
+        capturedNormals = []
+        pointConfidences = []
+        octree = nil
+        scannedMesh = nil
+        frameCount = 0
     }
     
-    // MARK: - Public Methods
-    // This part is missing proper view setup
-    func setARView(_ view: ARView) {
-        self.arView = view
-        guard arView != nil else {
-            print("ARView is nil. Please ensure it is properly initialized in the UI.")
-            return
-        }
-        setupARSession()
-        setupMetalView()
-        print("ARView and Metal setup complete.")
-    }
-
-    
-    
-    private func startScanTimer() {
-        scanTimer = Timer.scheduledTimer(withTimeInterval: scanFrequency, repeats: true) { [weak self] _ in
+    private func processMeshGeneration() {
+        progress = 0.1
+        
+        processingQueue.async { [weak self] in
             guard let self = self else { return }
-            self.updateScanProgress()
-        }
-    }
-    
-    private func updateScanProgress() {
-        // Update scan progress based on captured data or any criteria.
-        scanProgress += 0.05  // Example increment
-        if scanProgress >= 1.0 {
-            scanProgress = 1.0
-            stopScanning()  // Automatically stop scanning if complete
-        }
-    }
-    
-    
-    
-    func startScanning() {
-        print("\n=== 🟢 STARTING SCAN ===")
-        isScanning = true
-        clearData()
-        
-        guard ARWorldTrackingConfiguration.supportsFrameSemantics([.sceneDepth, .smoothedSceneDepth]) else {
-            print("❌ Device doesn't support depth scanning")
-            return
-        }
-        
-        setupARSession() // Reset session at the start of scanning
-        startScanTimer()
-        print("✅ Scan setup complete - beginning capture")
-    }
-
-    
-    func stopScanning() {
-        print("\n=== 🔴 STOPPING SCAN ===")
-        guard isScanning else { return }
-        
-        isScanning = false
-        scanTimer?.invalidate()
-        scanTimer = nil
-        
-        if points.count < minimumRequiredPoints {
-            print("❌ Not enough points captured")
-            handleScanError(.insufficientPoints)
-            return
-        }
-        
-        // Process scan data
-        let scanData = ScanData(points: points, normals: normals, confidences: confidences, colors: colors)
-        MeshProcessor.shared.processScanData(scanData) { [weak self] result in
-            switch result {
-            case .success(let meshData):
-                self?.updateMeshDisplay(meshData)
-            case .failure(let error):
-                self?.handleScanError(error)
+            
+            autoreleasepool {
+                do {
+                    // Check if we have enough points
+                    if self.capturedPoints.count < 1000 {
+                        DispatchQueue.main.async {
+                            self.state = .failed(ScanningError.insufficientPoints)
+                            self.statusMessage = "Not enough points captured. Please try again."
+                        }
+                        return
+                    }
+                    
+                    // 1. Organize points in octree
+                    self.buildOctree()
+                    
+                    DispatchQueue.main.async {
+                        self.progress = 0.3
+                        self.statusMessage = "Building 3D surface..."
+                    }
+                    
+                    // 2. Poisson surface reconstruction
+                    let densityField = self.computeDensityField()
+                    
+                    DispatchQueue.main.async {
+                        self.progress = 0.6
+                        self.statusMessage = "Generating mesh..."
+                    }
+                    
+                    // 3. Extract mesh using Marching Cubes
+                    let mesh = self.generateMeshWithMarchingCubes(densityField: densityField)
+                    
+                    DispatchQueue.main.async {
+                        self.progress = 0.8
+                        self.statusMessage = "Post-processing mesh..."
+                    }
+                    
+                    // 4. Post-process mesh
+                    let finalMesh = self.postProcessMesh(mesh)
+                    
+                    DispatchQueue.main.async {
+                        self.scannedMesh = finalMesh
+                        self.state = .completed
+                        self.progress = 1.0
+                        self.statusMessage = "Scan completed!"
+                    }
+                    
+                } catch {
+                    DispatchQueue.main.async {
+                        self.state = .failed(error)
+                        self.statusMessage = "Scanning failed: \(error.localizedDescription)"
+                    }
+                }
             }
         }
     }
     
+    // MARK: - Point Cloud Processing
     
-    
-    // MARK: - ARSessionDelegate
-    func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        if !isScanning { return }
+    private func captureDepthPoints(frame: ARFrame) {
+        guard let depthMap = frame.sceneDepth?.depthMap,
+              let confidenceMap = frame.sceneDepth?.confidenceMap else { return }
         
-        // Process depth data if available
-        if let sceneDepth = frame.smoothedSceneDepth,
-           let confidenceMap = frame.smoothedSceneDepth?.confidenceMap {
-            
-            let depthMap = sceneDepth.depthMap
-            processDepthData(
-                depthMap: depthMap,
-                confidenceMap: confidenceMap,
-                frame: frame
-            )
-        }
-    }
-    
-    
-    private func processDepthData(
-        depthMap: CVPixelBuffer,
-        confidenceMap: CVPixelBuffer,
-        frame: ARFrame
-    ) {
-        // Lock buffers for reading
+        // Process at reduced frequency to improve performance
+        frameCount += 1
+        if frameCount % captureFrequency != 0 { return }
+        
+        let width = CVPixelBufferGetWidth(depthMap)
+        let height = CVPixelBufferGetHeight(depthMap)
+        
         CVPixelBufferLockBaseAddress(depthMap, .readOnly)
         CVPixelBufferLockBaseAddress(confidenceMap, .readOnly)
         
@@ -333,112 +379,141 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
             CVPixelBufferUnlockBaseAddress(confidenceMap, .readOnly)
         }
         
-        let width = CVPixelBufferGetWidth(depthMap)
-        let height = CVPixelBufferGetHeight(depthMap)
-        let _ = CVPixelBufferGetBytesPerRow(depthMap)
+        let depthPointer = unsafeBitCast(CVPixelBufferGetBaseAddress(depthMap), to: UnsafeMutablePointer<Float>.self)
+        let confidencePointer = unsafeBitCast(CVPixelBufferGetBaseAddress(confidenceMap), to: UnsafeMutablePointer<UInt8>.self)
         
-        guard let depthBaseAddress = CVPixelBufferGetBaseAddress(depthMap)?.assumingMemoryBound(to: Float32.self),
-              let confidenceBaseAddress = CVPixelBufferGetBaseAddress(confidenceMap)?.assumingMemoryBound(to: UInt8.self) else {
-            return
-        }
+        // Sample every few pixels to reduce the number of points
+        let sampleStep = 4
         
-        // Get camera parameters
-        let camera = frame.camera
-        let intrinsics = camera.intrinsics
-        let transform = camera.transform
-        
-        // Process the pixels
-        for y in stride(from: 0, to: height, by: strideAmount) {
-            for x in stride(from: 0, to: width, by: strideAmount) {
+        for y in stride(from: 0, to: height, by: sampleStep) {
+            for x in stride(from: 0, to: width, by: sampleStep) {
                 let index = y * width + x
-                let depth = depthBaseAddress[index]
-                let confidence = Float(confidenceBaseAddress[index]) / Float(ARConfidenceLevel.high.rawValue)
                 
-                guard shouldProcessPoint(at: depth, confidence: confidence) else { continue }
+                let depth = depthPointer[index]
+                let confidence = Float(confidencePointer[index]) / 255.0
                 
-                if let worldPoint = unprojectPoint(
-                    SIMD2<Int32>(Int32(x), Int32(y)),
-                    depth: depth,
-                    intrinsics: intrinsics,
-                    transform: transform
-                ) {
-                    points.append(worldPoint)
-                    // Add corresponding normal and confidence
-                    normals.append(calculateNormal(for: worldPoint))
-                    confidences.append(confidence)
+                // Skip invalid depth or low confidence
+                if depth.isNaN || depth <= 0 || confidence < confidenceThreshold {
+                    continue
+                }
+                
+                // Unproject point to 3D space
+                let pointPos = self.unprojectPoint(x: x, y: y, depth: depth, intrinsics: frame.camera.intrinsics, viewMatrix: frame.camera.viewMatrix())
+                
+                // Skip points that are too far
+                if self.capturedPoints.count > 0 {
+                    var isTooFar = true
+                    for existingPoint in self.capturedPoints.suffix(100) {
+                        let distance = length(pointPos - existingPoint)
+                        if distance < distanceThreshold {
+                            isTooFar = false
+                            break
+                        }
+                    }
+                    
+                    if isTooFar { continue }
+                }
+                
+                // Calculate surface normal
+                let normal = self.calculateNormal(at: pointPos, frame: frame)
+                
+                // Add the point
+                self.capturedPoints.append(pointPos)
+                self.capturedNormals.append(normal)
+                self.pointConfidences.append(confidence)
+                
+                // Limit max points to prevent memory issues
+                if self.capturedPoints.count >= self.maxPoints {
+                    return
                 }
             }
         }
+    }
+    
+    private func unprojectPoint(x: Int, y: Int, depth: Float, intrinsics: simd_float3x3, viewMatrix: simd_float4x4) -> SIMD3<Float> {
+        // Convert pixel coordinates to normalized device coordinates
+        let normalizedX = (Float(x) - intrinsics[2][0]) / intrinsics[0][0]
+        let normalizedY = (Float(y) - intrinsics[2][1]) / intrinsics[1][1]
         
-        // Update point count
-        DispatchQueue.main.async { [weak self] in
-            self?.pointCount = self?.points.count ?? 0
+        // Create point in camera space
+        let cameraPoint = SIMD3<Float>(normalizedX * depth, normalizedY * depth, depth)
+        
+        // Convert to world space
+        let worldPoint = viewMatrix.inverse * SIMD4<Float>(cameraPoint, 1.0)
+        return SIMD3<Float>(worldPoint.x, worldPoint.y, worldPoint.z)
+    }
+    
+    private func calculateNormal(at point: SIMD3<Float>, frame: ARFrame) -> SIMD3<Float> {
+        // Simplified normal calculation - in a real app, you would use neighboring points
+        // to calculate a more accurate normal
+        let cameraPosition = frame.camera.transform.columns.3
+        let cameraPos = SIMD3<Float>(cameraPosition.x, cameraPosition.y, cameraPosition.z)
+        
+        let toCamera = normalize(cameraPos - point)
+        return toCamera
+    }
+    
+    // MARK: - Octree Implementation
+    
+    private func buildOctree() {
+        // Create octree with the bounding box of all points
+        self.octree = Octree(points: self.capturedPoints, normals: self.capturedNormals, confidences: self.pointConfidences)
+    }
+    
+    private func computeDensityField() -> [Float] {
+        // Placeholder for density field computation
+        return []
+    }
+    
+    private func generateMeshWithMarchingCubes(densityField: [Float]) -> MDLMesh {
+        // Placeholder for marching cubes implementation
+        // In a real app, this would extract a mesh from the density field
+        
+        // For now, returning a simple placeholder mesh
+        let allocator = MTKMeshBufferAllocator(device: MTLCreateSystemDefaultDevice()!)
+        return MDLMesh(sphereWithExtent: SIMD3<Float>(0.1, 0.1, 0.1), segments: SIMD2<UInt32>(20, 20), inwardNormals: false, geometryType: .triangles, allocator: allocator)
+    }
+    
+    private func postProcessMesh(_ mesh: MDLMesh) -> MDLMesh {
+        // Placeholder for mesh post-processing
+        // In a real app, this would smooth and optimize the mesh
+        return mesh
+    }
+    
+    // MARK: - ARSessionDelegate
+    func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        if state == .scanning {
+            captureDepthPoints(frame: frame)
+            
+            DispatchQueue.main.async {
+                self.progress = min(0.8, Float(self.capturedPoints.count) / Float(self.maxPoints))
+                if self.capturedPoints.count % 1000 == 0 {
+                    self.statusMessage = "Captured \(self.capturedPoints.count) points"
+                }
+            }
         }
     }
     
-    private func unprojectPoint(_ pixel: SIMD2<Int32>,
-                                    depth: Float,
-                                    intrinsics: simd_float3x3,
-                                    transform: simd_float4x4) -> SIMD3<Float>? {
-            let px = (Float(pixel.x) - intrinsics[2][0]) / intrinsics[0][0]
-            let py = (Float(pixel.y) - intrinsics[2][1]) / intrinsics[1][1]
-            
-            let pointCamera = SIMD3<Float>(px * depth, py * depth, depth)
-            let pointWorld = transform * SIMD4<Float>(pointCamera, 1)
-            
-            return SIMD3<Float>(pointWorld.x / pointWorld.w,
-                                pointWorld.y / pointWorld.w,
-                                pointWorld.z / pointWorld.w)
+    func session(_ session: ARSession, didFailWithError error: Error) {
+        DispatchQueue.main.async {
+            self.state = .failed(error)
+            self.statusMessage = "AR session failed: \(error.localizedDescription)"
         }
-        
+    }
     
     func sessionWasInterrupted(_ session: ARSession) {
-        DispatchQueue.main.async { [weak self] in
-            self?.scanningMessage = "AR Session interrupted"
-            self?.stopScanning()
+        DispatchQueue.main.async {
+            if self.state == .scanning {
+                self.state = .failed(ScanningError.sessionInterrupted)
+                self.statusMessage = "Scanning interrupted"
+            }
         }
     }
     
     func sessionInterruptionEnded(_ session: ARSession) {
-        DispatchQueue.main.async { [weak self] in
-            self?.scanningMessage = "AR Session resumed"
-            self?.setupARSession()
+        DispatchQueue.main.async {
+            self.statusMessage = "Session interruption ended. You can restart scanning."
         }
-    }
-    // Prepares Metal buffers (used by ScanningManager)
-    private func prepareBuffers() {
-        guard let device = device else { return }
-        
-        vertexBuffer = device.makeBuffer(length: maxPoints * MemoryLayout<SIMD3<Float>>.size, options: [])
-        normalBuffer = device.makeBuffer(length: maxPoints * MemoryLayout<SIMD3<Float>>.size, options: [])
-        indexBuffer = device.makeBuffer(length: maxPoints * MemoryLayout<UInt32>.size, options: [])
-        print("Buffers prepared.")
-    }
-    
-    // Renders the mesh in Metal (as part of MTKViewDelegate in ScanningManager)
-    func renderMesh(in view: MTKView) {
-        guard let commandQueue = commandQueue,
-              let renderPassDescriptor = view.currentRenderPassDescriptor,
-              let drawable = view.currentDrawable else { return }
-        
-        let commandBuffer = commandQueue.makeCommandBuffer()
-        let renderEncoder = commandBuffer?.makeRenderCommandEncoder(descriptor: renderPassDescriptor)
-        
-        // Add rendering commands here, e.g., setting buffers and drawing primitives
-        
-        renderEncoder?.endEncoding()
-        commandBuffer?.present(drawable)
-        commandBuffer?.commit()
-    }
-    
-    
-    // MARK: - MTKViewDelegate
-    func draw(in view: MTKView) {
-        renderMesh(in: view)
-    }
-    
-    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
-        print("Drawable size will change to: \(size)")
     }
     
     // MARK: - Private Methods
@@ -467,7 +542,6 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
         print("Mesh added to ARView.")
     }
     
-    
     private func updateMeshDisplay(_ meshData: MeshData) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -482,9 +556,6 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
             print("Mesh display updated in ARView.")
         }
     }
-    
-    
-    
     
     private func handleTrackingStateUpdate(_ state: ARCamera.TrackingState) {
         lastTrackingState = state
@@ -521,7 +592,6 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
         }
     }
 
-    
     private func shouldProcessPoint(at depth: Float, confidence: Float) -> Bool {
         // Skip points that are too far or too close
         guard depth > 0.3 && depth < maxScanDistance else { return false }
@@ -534,7 +604,6 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
         let randomThreshold = 0.2 + (depth / maxScanDistance) * 0.6
         return Float.random(in: 0...1) < randomThreshold
     }
-    
     
     private func processDepthFrame(
         depthData: Data,
@@ -613,12 +682,6 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
         return SIMD3<Float>(Float(x), Float(y), depth)
     }
     
-    // Helper function to calculate normal vector for a 3D point
-    private func calculateNormal(for point: SIMD3<Float>) -> SIMD3<Float> {
-        // Replace with actual normal calculation logic as needed
-        return SIMD3<Float>(0, 0, 1) // Placeholder
-    }
-    
     // Helper function to retrieve color for a point from the color buffer
     private func getColorForPoint(at x: Int, y: Int, from colorBuffer: CVPixelBuffer) -> SIMD3<Float> {
         // Placeholder for color retrieval logic; convert RGB values to SIMD3<Float> format
@@ -644,7 +707,6 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
         
         arView.environment.sceneUnderstanding.options = [.occlusion, .physics]
     }
-    
     
     private func processFrameIfNeeded(_ frame: ARFrame) {
         guard let sceneDepth = frame.smoothedSceneDepth,
@@ -682,7 +744,6 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
         return data
     }
     
-    
     private func updateProgress(message: String, progress: Float) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -714,4 +775,46 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
         exportedFileURL = nil
     }
     
+    private func prepareBuffers() {
+        guard let device = device else { return }
+        
+        vertexBuffer = device.makeBuffer(length: maxPoints * MemoryLayout<SIMD3<Float>>.size, options: [])
+        normalBuffer = device.makeBuffer(length: maxPoints * MemoryLayout<SIMD3<Float>>.size, options: [])
+        indexBuffer = device.makeBuffer(length: maxPoints * MemoryLayout<UInt32>.size, options: [])
+        print("Buffers prepared.")
+    }
+    
+    // Renders the mesh in Metal (as part of MTKViewDelegate in ScanningManager)
+    func renderMesh(in view: MTKView) {
+        guard let commandQueue = commandQueue,
+              let renderPassDescriptor = view.currentRenderPassDescriptor,
+              let drawable = view.currentDrawable else { return }
+        
+        let commandBuffer = commandQueue.makeCommandBuffer()
+        let renderEncoder = commandBuffer?.makeRenderCommandEncoder(descriptor: renderPassDescriptor)
+        
+        // Add rendering commands here, e.g., setting buffers and drawing primitives
+        
+        renderEncoder?.endEncoding()
+        commandBuffer?.present(drawable)
+        commandBuffer?.commit()
+    }
+    
+    // MARK: - MTKViewDelegate
+    func draw(in view: MTKView) {
+        renderMesh(in: view)
+    }
+    
+    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+        print("Drawable size will change to: \(size)")
+    }
+}
+
+// MARK: - Octree Implementation
+
+class Octree {
+    // Basic octree implementation - to be expanded
+    init(points: [SIMD3<Float>], normals: [SIMD3<Float>], confidences: [Float]) {
+        // Initialize octree with the point cloud data
+    }
 }

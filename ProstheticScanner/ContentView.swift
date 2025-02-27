@@ -2,7 +2,7 @@ import SwiftUI
 import RealityKit
 
 struct ContentView: View {
-    @StateObject private var scanningManager = ScanningManager.shared
+    @StateObject private var scanningManager = ScanningManager()
     @StateObject private var meshProcessor = MeshProcessor.shared
     @State private var showGuide = true
     @State private var currentScreen: ScanScreen = .guide
@@ -33,7 +33,7 @@ struct ContentView: View {
                     
                     // Controls overlay
                     VStack {
-                        Text(scanningManager.scanningMessage)
+                        Text(scanningManager.statusMessage)
                             .font(.headline)
                             .padding()
                             .background(.ultraThinMaterial)
@@ -50,8 +50,8 @@ struct ContentView: View {
                             .foregroundColor(.white)
                             .cornerRadius(10)
                             
-                            if scanningManager.isScanning {
-                                ProgressView(value: scanningManager.scanProgress)
+                            if scanningManager.state == .scanning {
+                                ProgressView(value: scanningManager.progress)
                                     .progressViewStyle(LinearProgressViewStyle())
                                     .padding()
                                 
@@ -133,7 +133,7 @@ struct ARViewContainer: UIViewRepresentable {
     
     func makeUIView(context: Context) -> ARView {
         let arView = ARView(frame: .zero)
-        scanningManager.setARView(arView)
+        scanningManager.setup(arView: arView)
         return arView
     }
     
