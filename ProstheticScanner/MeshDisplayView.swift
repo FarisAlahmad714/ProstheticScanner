@@ -109,7 +109,11 @@ struct MeshDisplayView: View {
                 asset.add(mesh)
                 
                 // Convert to SCNScene
-                let tempScene = try SCNScene(mdlAsset: asset)
+                guard let tempScene = SCNScene(mdlAsset: asset) else {
+                    print("Failed to create scene from asset")
+                    createFallbackSphere(in: scene)
+                    return scene
+                }
                 
                 // Extract the node
                 if let meshNode = tempScene.rootNode.childNodes.first {
@@ -185,12 +189,9 @@ struct MeshDisplayView: View {
     }
     
     private func updateDisplayMode(_ newMode: DisplayMode) {
-        // Recreate scene with new display mode
-        let updatedScene = createScene()
-        
-        // Find SceneView and update its scene
-        // This is a simplification - in a real app you'd want to update the existing scene
-        // rather than recreating it, to preserve camera position etc.
+        // We don't need to do anything here since the scene will be recreated
+        // when SwiftUI refreshes the view after the displayMode changes
+        // The onChange handler already triggers a view refresh
     }
     
     private func addMeasurementsToScene(_ scene: SCNScene, for mesh: MDLMesh) {
