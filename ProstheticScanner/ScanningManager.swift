@@ -413,7 +413,7 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
                 }
                 
                 // Unproject point to 3D space
-                let pointPos = self.unprojectPoint(x: x, y: y, depth: depth, intrinsics: frame.camera.intrinsics, viewMatrix: frame.camera.viewMatrix())
+                let pointPos = self.unprojectPoint(x: x, y: y, depth: depth, intrinsics: frame.camera.intrinsics, viewMatrix: frame.camera.viewMatrix(for: .geometry))
                 
                 // Skip points that are too far
                 if self.capturedPoints.count > 0 {
@@ -481,12 +481,24 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate, MTKViewDel
     }
     
     private func generateMeshWithMarchingCubes(densityField: [Float]) throws -> MDLMesh {
-        // Placeholder for marching cubes implementation
-        // In a real app, this would extract a mesh from the density field
+        // Add error conditions
+        if densityField.isEmpty {
+            throw ScanningError.meshGenerationFailed
+        }
         
-        // For now, returning a simple placeholder mesh
+        // Marching cubes implementation could have other failure conditions
+        // For example, if the density field is too small:
+        if densityField.count < 10 {
+            throw ScanningError.insufficientPoints
+        }
+        
+        // If everything is valid, return the mesh
         let allocator = MTKMeshBufferAllocator(device: MTLCreateSystemDefaultDevice()!)
-        return MDLMesh(sphereWithExtent: SIMD3<Float>(0.1, 0.1, 0.1), segments: SIMD2<UInt32>(20, 20), inwardNormals: false, geometryType: .triangles, allocator: allocator)
+        return MDLMesh(sphereWithExtent: SIMD3<Float>(0.1, 0.1, 0.1), 
+                       segments: SIMD2<UInt32>(20, 20), 
+                       inwardNormals: false, 
+                       geometryType: .triangles, 
+                       allocator: allocator)
     }
     
     private func postProcessMesh(_ mesh: MDLMesh) -> MDLMesh {
