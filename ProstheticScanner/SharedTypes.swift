@@ -1,5 +1,4 @@
-//
-//  SharedTypes.swift
+///  SharedTypes.swift
 //  ProstheticScanner
 //
 //  Created by Faris Alahmad on 11/10/24.
@@ -9,6 +8,8 @@ import Foundation
 import simd
 
 // MARK: - Shared Data Structures
+
+/// Represents the raw data captured during scanning.
 struct ScanData {
     let points: [SIMD3<Float>]
     let normals: [SIMD3<Float>]
@@ -16,18 +17,22 @@ struct ScanData {
     let colors: [SIMD3<Float>]
 }
 
+/// Represents the processed mesh data.
 struct MeshData {
     let vertices: [SIMD3<Float>]
     let normals: [SIMD3<Float>]
     let triangles: [UInt32]
 }
 
+/// Represents surface data used in processing.
 struct SurfaceData {
     let vertices: [SIMD3<Float>]
     let normals: [SIMD3<Float>]
 }
 
 // MARK: - Error Types
+
+/// Errors that can occur during mesh processing.
 enum MeshError: Error {
     case insufficientPoints
     case processingFailed
@@ -38,6 +43,7 @@ enum MeshError: Error {
     case deviceNotSupported
 }
 
+/// Errors that can occur during scanning.
 enum ScanError: Error {
     case insufficientPoints
     case processingTimeout
@@ -46,11 +52,14 @@ enum ScanError: Error {
 }
 
 // MARK: - Support Structures
+
+/// Represents a single vertex with position and normal.
 struct Vertex {
     var position: SIMD3<Float>
     var normal: SIMD3<Float>
 }
 
+/// Represents a sparse Laplacian matrix for mesh processing.
 struct LaplacianMatrix {
     var rows: [Int]
     var cols: [Int]
@@ -72,6 +81,8 @@ struct LaplacianMatrix {
 }
 
 // MARK: - Constants and Settings
+
+/// Settings used throughout the processing pipeline.
 struct ProcessingSettings {
     static let minPoints = 1000
     static let voxelSize: Float = 0.03
@@ -95,6 +106,8 @@ struct ProcessingSettings {
 }
 
 // MARK: - Lookup Tables
+
+/// Lookup tables for the Marching Cubes algorithm.
 struct MarchingCubesTable {
     static let edgeTable: [Int] = [
         0x0, 0x109, 0x203, 0x30a, 0x406, 0x50f, 0x605, 0x70c,
