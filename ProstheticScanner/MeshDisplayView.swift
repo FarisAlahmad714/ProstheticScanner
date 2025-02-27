@@ -61,22 +61,15 @@ struct MeshDisplayView: View {
     private func createScene() -> SCNScene {
         let scene = SCNScene()
         
-        // Convert MDLMesh to SCNNode if available
-        if let mesh = scanningManager.scannedMesh {
-            let scnNode = SCNNode(mdlObject: mesh)
-            
-            // Adjust material to make it visible
-            let material = SCNMaterial()
-            material.diffuse.contents = UIColor.white
-            material.lightingModel = .phong
-            scnNode.geometry?.firstMaterial = material
-            
-            // Center the mesh
-            scnNode.position = SCNVector3(0, 0, 0)
-            
-            // Add to scene
-            scene.rootNode.addChildNode(scnNode)
-        }
+        // Create a simple sphere just to test visualization
+        let sphereGeometry = SCNSphere(radius: 0.1)
+        let sphereNode = SCNNode(geometry: sphereGeometry)
+        
+        let material = SCNMaterial()
+        material.diffuse.contents = UIColor.blue
+        sphereGeometry.firstMaterial = material
+        
+        scene.rootNode.addChildNode(sphereNode)
         
         return scene
     }
