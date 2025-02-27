@@ -100,40 +100,18 @@ struct MeshDisplayView: View {
     }
     
     private func createScene() -> SCNScene {
+        // Create a simple scene with just a sphere for testing
         let scene = SCNScene()
         
-        if let mesh = scanningManager.scannedMesh {
-            // Create an MDL asset from the mesh
-            let asset = MDLAsset()
-            asset.add(mesh)
-            
-            // Convert to SCNScene - using non-throwing initializer
-            guard let tempScene = SCNScene(mdlAsset: asset) else {
-                print("Failed to create scene from asset")
-                createFallbackSphere(in: scene)
-                return scene
-            }
-            
-            // Extract the node
-            if let meshNode = tempScene.rootNode.childNodes.first {
-                // Apply material based on display mode
-                applyMaterial(to: meshNode, mode: displayMode)
-                
-                // Add to our scene
-                scene.rootNode.addChildNode(meshNode)
-                
-                // Add measurement indicators if needed
-                if showMeasurements {
-                    addMeasurementsToScene(scene, for: mesh)
-                }
-            } else {
-                print("No nodes found in converted scene")
-                createFallbackSphere(in: scene)
-            }
-        } else {
-            // No mesh available, create fallback sphere
-            createFallbackSphere(in: scene)
-        }
+        // Add a basic sphere
+        let sphereGeometry = SCNSphere(radius: 0.1)
+        let sphereNode = SCNNode(geometry: sphereGeometry)
+        
+        let material = SCNMaterial()
+        material.diffuse.contents = UIColor.blue
+        sphereGeometry.firstMaterial = material
+        
+        scene.rootNode.addChildNode(sphereNode)
         
         return scene
     }
@@ -179,8 +157,8 @@ struct MeshDisplayView: View {
             let material = SCNMaterial()
             material.diffuse.contents = UIColor.white
             material.normal.contents = UIColor.blue.withAlphaComponent(0.5)
-            material.metalness.contents = 0.5
-            material.roughness.contents = 0.5
+            material.metalness.contents = NSNumber(value: 0.5)
+            material.roughness.contents = NSNumber(value: 0.5)
             geometry.firstMaterial = material
         }
     }
@@ -216,13 +194,15 @@ struct MeshDisplayView: View {
     private func addDimensionLabel(to scene: SCNScene, text: String, at position: SCNVector3) {
         let textGeometry = SCNText(string: text, extrusionDepth: 0.01)
         textGeometry.font = UIFont.systemFont(ofSize: 0.05)
+        textGeometry.firstMaterial?.diffuse.contents = UIColor.white
         
         let textNode = SCNNode(geometry: textGeometry)
         textNode.position = position
         textNode.scale = SCNVector3(0.01, 0.01, 0.01)
         
-        // Always face the camera
-        textNode.constraints = [SCNBillboardConstraint()]
+        let billboardConstraint = SCNBillboardConstraint()
+        billboardConstraint.freeAxes = .all
+        textNode.constraints = [billboardConstraint]
         
         scene.rootNode.addChildNode(textNode)
     }
