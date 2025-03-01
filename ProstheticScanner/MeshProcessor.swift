@@ -100,16 +100,3 @@ class MeshProcessor: ObservableObject {
         }
     }
 }
-
-/// Errors that can occur during mesh processing.
-enum MeshError: Error {
-    case insufficientPoints
-    case processingFailed
-}
-
-/// Struct to hold processed mesh data.
-struct MeshData {
-    let vertices: [SIMD3<Float>]
-    let normals: [SIMD3<Float>]
-    let triangles: [UInt32]
-}
