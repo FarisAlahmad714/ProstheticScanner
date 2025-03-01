@@ -168,24 +168,63 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate {
         let meshGeometry = meshAnchor.geometry
         
         do {
-            // Convert ARMeshGeometry to a format RealityKit can use
-            let vertices = meshGeometry.vertices
-            let faces = meshGeometry.faces
+            // Need to create MDLMesh manually with proper allocator and buffers
+            let device = MTLCreateSystemDefaultDevice()!
+            let allocator = MTKMeshBufferAllocator(device: device)
             
-            // Create a temporary MDLMesh
-            let allocator = MTKMeshBufferAllocator(device: MTLCreateSystemDefaultDevice()!)
-            let mdlMesh = MDLMesh(vertexBuffer: vertices, vertexCount: vertices.count, 
-                                   descriptor: MDLVertexDescriptor(), 
-                                   submeshes: [MDLSubmesh(indexBuffer: faces, indexCount: faces.count, 
-                                                         indexType: .uInt32, geometryType: .triangles, 
-                                                         material: nil)])
+            // Create vertex buffer from ARMeshGeometry vertices
+            let vertexBuffer = allocator.newBuffer(
+                MemoryLayout<SIMD3<Float>>.stride * meshGeometry.vertices.count,
+                type: .vertex
+            )
+            let vertexMap = vertexBuffer.map()
+            for i in 0..<meshGeometry.vertices.count {
+                let vertex = meshGeometry.vertices[i]
+                memcpy(
+                    vertexMap.bytes + (i * MemoryLayout<SIMD3<Float>>.stride),
+                    [vertex.x, vertex.y, vertex.z],
+                    MemoryLayout<SIMD3<Float>>.stride
+                )
+            }
             
-            // Then convert to MeshResource
+            // Create index buffer from ARMeshGeometry faces
+            let indexBuffer = allocator.newBuffer(
+                MemoryLayout<UInt32>.stride * meshGeometry.faces.count * 3,
+                type: .index
+            )
+            let indexMap = indexBuffer.map()
+            for i in 0..<meshGeometry.faces.count {
+                let face = meshGeometry.faces[i]
+                let indices: [UInt32] = [UInt32(face.0), UInt32(face.1), UInt32(face.2)]
+                memcpy(
+                    indexMap.bytes + (i * 3 * MemoryLayout<UInt32>.stride),
+                    indices,
+                    3 * MemoryLayout<UInt32>.stride
+                )
+            }
+            
+            // Create MDLMesh with the buffers
+            let mdlMesh = MDLMesh(
+                vertexBuffer: vertexBuffer,
+                vertexCount: meshGeometry.vertices.count,
+                descriptor: MDLVertexDescriptor(),
+                submeshes: [
+                    MDLSubmesh(
+                        indexBuffer: indexBuffer,
+                        indexCount: meshGeometry.faces.count * 3,
+                        indexType: .uInt32,
+                        geometryType: .triangles,
+                        material: nil
+                    )
+                ]
+            )
+            
+            // Convert to MeshResource
             let meshResource = try MeshResource.generate(from: [mdlMesh])
             let material = SimpleMaterial(color: .blue.withAlphaComponent(0.5), isMetallic: false)
             let meshEntity = ModelEntity(mesh: meshResource, materials: [material])
             
-            // Fix #3: Create anchor entity without direct anchor reference
+            // Create anchor entity
             let anchorEntity = AnchorEntity()
             anchorEntity.transform = Transform(matrix: meshAnchor.transform)
             anchorEntity.addChild(meshEntity)
@@ -206,8 +245,60 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate {
             
             // Update the mesh using same technique as above
             do {
+                // Same manual conversion as in addMeshAnchorToScene
+                let device = MTLCreateSystemDefaultDevice()!
+                let allocator = MTKMeshBufferAllocator(device: device)
                 let meshGeometry = meshAnchor.geometry
-                let meshResource = try MeshResource.generate(from: [meshGeometry])
+                
+                // Create vertex buffer
+                let vertexBuffer = allocator.newBuffer(
+                    MemoryLayout<SIMD3<Float>>.stride * meshGeometry.vertices.count,
+                    type: .vertex
+                )
+                let vertexMap = vertexBuffer.map()
+                for i in 0..<meshGeometry.vertices.count {
+                    let vertex = meshGeometry.vertices[i]
+                    memcpy(
+                        vertexMap.bytes + (i * MemoryLayout<SIMD3<Float>>.stride),
+                        [vertex.x, vertex.y, vertex.z],
+                        MemoryLayout<SIMD3<Float>>.stride
+                    )
+                }
+                
+                // Create index buffer
+                let indexBuffer = allocator.newBuffer(
+                    MemoryLayout<UInt32>.stride * meshGeometry.faces.count * 3,
+                    type: .index
+                )
+                let indexMap = indexBuffer.map()
+                for i in 0..<meshGeometry.faces.count {
+                    let face = meshGeometry.faces[i]
+                    let indices: [UInt32] = [UInt32(face.0), UInt32(face.1), UInt32(face.2)]
+                    memcpy(
+                        indexMap.bytes + (i * 3 * MemoryLayout<UInt32>.stride),
+                        indices,
+                        3 * MemoryLayout<UInt32>.stride
+                    )
+                }
+                
+                // Create MDLMesh
+                let mdlMesh = MDLMesh(
+                    vertexBuffer: vertexBuffer,
+                    vertexCount: meshGeometry.vertices.count,
+                    descriptor: MDLVertexDescriptor(),
+                    submeshes: [
+                        MDLSubmesh(
+                            indexBuffer: indexBuffer,
+                            indexCount: meshGeometry.faces.count * 3,
+                            indexType: .uInt32,
+                            geometryType: .triangles,
+                            material: nil
+                        )
+                    ]
+                )
+                
+                // Convert to MeshResource and update
+                let meshResource = try MeshResource.generate(from: [mdlMesh])
                 meshEntity.model?.mesh = meshResource
             } catch {
                 print("Failed to update mesh resource: \(error)")
