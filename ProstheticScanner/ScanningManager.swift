@@ -1,6 +1,7 @@
 import RealityKit
 import ARKit
 import Combine
+import MetalKit
 
 /// Manages the AR scanning process, including real-time mesh visualization and depth data capture.
 class ScanningManager: NSObject, ObservableObject, ARSessionDelegate {
@@ -165,12 +166,30 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate {
     private func addMeshAnchorToScene(_ meshAnchor: ARMeshAnchor) {
         guard let arView = arView else { return }
         let meshGeometry = meshAnchor.geometry
+        
         do {
-            let meshResource = try MeshResource.generate(from: [meshGeometry])
+            // Convert ARMeshGeometry to a format RealityKit can use
+            let vertices = meshGeometry.vertices
+            let faces = meshGeometry.faces
+            
+            // Create a temporary MDLMesh
+            let allocator = MTKMeshBufferAllocator(device: MTLCreateSystemDefaultDevice()!)
+            let mdlMesh = MDLMesh(vertexBuffer: vertices, vertexCount: vertices.count, 
+                                   descriptor: MDLVertexDescriptor(), 
+                                   submeshes: [MDLSubmesh(indexBuffer: faces, indexCount: faces.count, 
+                                                         indexType: .uInt32, geometryType: .triangles, 
+                                                         material: nil)])
+            
+            // Then convert to MeshResource
+            let meshResource = try MeshResource.generate(from: [mdlMesh])
             let material = SimpleMaterial(color: .blue.withAlphaComponent(0.5), isMetallic: false)
             let meshEntity = ModelEntity(mesh: meshResource, materials: [material])
-            let anchorEntity = AnchorEntity(anchor: meshAnchor)
+            
+            // Fix #3: Create anchor entity without direct anchor reference
+            let anchorEntity = AnchorEntity()
+            anchorEntity.transform = Transform(matrix: meshAnchor.transform)
             anchorEntity.addChild(meshEntity)
+            
             arView.scene.addAnchor(anchorEntity)
             meshEntities.append(meshEntity)
             meshAnchors.append(meshAnchor)
@@ -181,15 +200,18 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate {
     
     /// Updates an existing mesh entity with new geometry.
     private func updateMeshAnchorInScene(_ meshAnchor: ARMeshAnchor) {
-        guard let arView = arView,
-              let anchorEntity = arView.scene.anchors.first(where: { $0.anchor == meshAnchor }),
-              let meshEntity = anchorEntity.children.first as? ModelEntity else { return }
-        do {
-            let meshGeometry = meshAnchor.geometry
-            let meshResource = try MeshResource.generate(from: [meshGeometry])
-            meshEntity.model?.mesh = meshResource
-        } catch {
-            print("Failed to update mesh resource: \(error)")
+        // Find mesh by identifier instead of comparing anchors directly
+        if let index = meshAnchors.firstIndex(where: { $0.identifier == meshAnchor.identifier }) {
+            guard let meshEntity = meshEntities[safe: index] else { return }
+            
+            // Update the mesh using same technique as above
+            do {
+                let meshGeometry = meshAnchor.geometry
+                let meshResource = try MeshResource.generate(from: [meshGeometry])
+                meshEntity.model?.mesh = meshResource
+            } catch {
+                print("Failed to update mesh resource: \(error)")
+            }
         }
     }
     
@@ -209,5 +231,12 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate {
         // Placeholder: Implement proper mesh generation (e.g., Poisson reconstruction)
         let allocator = MTKMeshBufferAllocator(device: MTLCreateSystemDefaultDevice()!)
         return MDLMesh(sphereWithExtent: [0.1, 0.1, 0.1], segments: [20, 20], inwardNormals: false, geometryType: .triangles, allocator: allocator)
+    }
+}
+
+// Helper extension for safe array access
+extension Array {
+    subscript(safe index: Index) -> Element? {
+        return indices.contains(index) ? self[index] : nil
     }
 }
