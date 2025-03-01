@@ -116,6 +116,7 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate {
         configuration.frameSemantics.insert(.sceneDepth) // Enable depth data
         arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
         arView.session.delegate = self
+        arView.debugOptions = [.showSceneUnderstanding]
     }
     
     /// Resets internal scanning state while preserving configuration.
