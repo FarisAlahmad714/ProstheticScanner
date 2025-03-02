@@ -1,8 +1,8 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import SceneKit
+import simd
 
-// Export options sheet with functioning download
 struct ExportOptionsSheet: View {
     let meshData: MeshData
     let onExport: () -> Void
@@ -39,9 +39,9 @@ struct ExportOptionsSheet: View {
         
         var utType: UTType {
             switch self {
-            case .obj: return UTType.obj
-            case .stl: return UTType.stl
-            case .ply: return UTType.ply
+            case .obj: return .obj
+            case .stl: return .stl
+            case .ply: return .ply
             }
         }
     }
@@ -145,7 +145,6 @@ struct ExportOptionsSheet: View {
         let vertexCount = meshData.vertices.count
         let triangleCount = meshData.triangles.count / 3
         
-        // Rough estimation based on format
         var bytesPerVertex: Int
         var bytesPerTriangle: Int
         
@@ -163,7 +162,6 @@ struct ExportOptionsSheet: View {
         
         let estimatedBytes = vertexCount * bytesPerVertex + triangleCount * bytesPerTriangle
         
-        // Convert to appropriate unit
         if estimatedBytes < 1024 {
             return "\(estimatedBytes) B"
         } else if estimatedBytes < 1024 * 1024 {
@@ -181,23 +179,14 @@ struct ExportOptionsSheet: View {
         exportSuccess = false
         exportError = nil
         
-        // Create a background task to generate the file
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                // Generate the file data
                 let fileData = try generateFileData()
                 
-                // Update UI on main thread
                 DispatchQueue.main.async {
                     isExporting = false
-                    
-                    // Present the share sheet to save the file
                     shareFile(data: fileData)
-                    
-                    // Mark as success
                     exportSuccess = true
-                    
-                    // Call original export handler
                     onExport()
                 }
             } catch {
@@ -211,14 +200,11 @@ struct ExportOptionsSheet: View {
     
     // Generate file data based on selected format
     private func generateFileData() throws -> Data {
-        // Create a temporary scene to export
         let scene = SCNScene()
         
-        // Create geometry sources
         let vertices = meshData.vertices.map { SCNVector3($0.x, $0.y, $0.z) }
         let vertexSource = SCNGeometrySource(vertices: vertices)
         
-        // Use normals if available, or create default ones
         let normals: [SCNVector3]
         if meshData.normals.count == meshData.vertices.count {
             normals = meshData.normals.map { SCNVector3($0.x, $0.y, $0.z) }
@@ -227,7 +213,6 @@ struct ExportOptionsSheet: View {
         }
         let normalSource = SCNGeometrySource(normals: normals)
         
-        // Create geometry element
         let indices = meshData.triangles
         let data = Data(bytes: indices, count: indices.count * MemoryLayout<UInt32>.size)
         let element = SCNGeometryElement(
@@ -237,7 +222,6 @@ struct ExportOptionsSheet: View {
             bytesPerIndex: MemoryLayout<UInt32>.size
         )
         
-        // Create geometry and node
         let geometry = SCNGeometry(sources: [vertexSource, normalSource], elements: [element])
         let material = SCNMaterial()
         material.diffuse.contents = UIColor.blue
@@ -246,25 +230,110 @@ struct ExportOptionsSheet: View {
         let node = SCNNode(geometry: geometry)
         scene.rootNode.addChildNode(node)
         
-        // Generate the file data
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("export_temp.\(selectedFormat.fileExtension)")
         
-        // Export based on format
         switch selectedFormat {
         case .obj:
             try scene.write(to: url, options: nil, delegate: nil, progressHandler: nil)
-        case .stl, .ply:
-            // Use SCNScene's export capability
-            try scene.export(to: url, options: [SCNSceneExportDestinationURL: url])
+            
+        case .stl:
+            let tempDaeURL = FileManager.default.temporaryDirectory.appendingPathComponent("temp.dae")
+            try scene.write(to: tempDaeURL, options: nil, delegate: nil, progressHandler: nil)
+            
+            let stlData = try convertToSTL(from: tempDaeURL)
+            try stlData.write(to: url)
+            try? FileManager.default.removeItem(at: tempDaeURL)
+            
+        case .ply:
+            let tempDaeURL = FileManager.default.temporaryDirectory.appendingPathComponent("temp.dae")
+            try scene.write(to: tempDaeURL, options: nil, delegate: nil, progressHandler: nil)
+            
+            let plyData = try convertToPLY(from: tempDaeURL)
+            try plyData.write(to: url)
+            try? FileManager.default.removeItem(at: tempDaeURL)
         }
         
-        // Read the data from the URL
         let fileData = try Data(contentsOf: url)
-        
-        // Clean up the temporary file
         try? FileManager.default.removeItem(at: url)
         
         return fileData
+    }
+    
+    // Convert to STL binary format
+    private func convertToSTL(from daeURL: URL) throws -> Data {
+        var stlData = Data()
+        
+        // STL Binary Header (80 bytes) + triangle count (4 bytes)
+        let header = "ProstheticScanner STL Export" + String(repeating: " ", count: 80 - 25)
+        stlData.append(Data(header.utf8))
+        
+        let triangleCount = UInt32(meshData.triangles.count / 3)
+        withUnsafeBytes(of: triangleCount.littleEndian) { stlData.append(contentsOf: $0) }
+        
+        for i in stride(from: 0, to: meshData.triangles.count, by: 3) {
+            let v1 = meshData.vertices[Int(meshData.triangles[i])]
+            let v2 = meshData.vertices[Int(meshData.triangles[i + 1])]
+            let v3 = meshData.vertices[Int(meshData.triangles[i + 2])]
+            
+            // Calculate normal
+            let normal = normalize(cross(v2 - v1, v3 - v1))
+            
+            // Append normal (3 floats, 4 bytes each)
+            stlData.append(floatToLittleEndian(normal.x))
+            stlData.append(floatToLittleEndian(normal.y))
+            stlData.append(floatToLittleEndian(normal.z))
+            
+            // Append vertex 1
+            stlData.append(floatToLittleEndian(v1.x))
+            stlData.append(floatToLittleEndian(v1.y))
+            stlData.append(floatToLittleEndian(v1.z))
+            
+            // Append vertex 2
+            stlData.append(floatToLittleEndian(v2.x))
+            stlData.append(floatToLittleEndian(v2.y))
+            stlData.append(floatToLittleEndian(v2.z))
+            
+            // Append vertex 3
+            stlData.append(floatToLittleEndian(v3.x))
+            stlData.append(floatToLittleEndian(v3.y))
+            stlData.append(floatToLittleEndian(v3.z))
+            
+            // Append attribute byte count (2 bytes, typically 0)
+            withUnsafeBytes(of: UInt16(0).littleEndian) { stlData.append(contentsOf: $0) }
+        }
+        
+        return stlData
+    }
+    
+    // Helper function to convert Float to little-endian Data
+    private func floatToLittleEndian(_ value: Float) -> Data {
+        var littleEndianValue = value.bitPattern.littleEndian
+        return Data(bytes: &littleEndianValue, count: MemoryLayout<UInt32>.size)
+    }
+    
+    // Convert to PLY ASCII format
+    private func convertToPLY(from daeURL: URL) throws -> Data {
+        var plyString = "ply\nformat ascii 1.0\n"
+        plyString += "element vertex \(meshData.vertices.count)\n"
+        plyString += "property float x\nproperty float y\nproperty float z\n"
+        plyString += "element face \(meshData.triangles.count / 3)\n"
+        plyString += "property list uchar int vertex_indices\nend_header\n"
+        
+        for vertex in meshData.vertices {
+            plyString += "\(vertex.x) \(vertex.y) \(vertex.z)\n"
+        }
+        
+        for i in stride(from: 0, to: meshData.triangles.count, by: 3) {
+            let idx1 = meshData.triangles[i]
+            let idx2 = meshData.triangles[i + 1]
+            let idx3 = meshData.triangles[i + 2]
+            plyString += "3 \(idx1) \(idx2) \(idx3)\n"
+        }
+        
+        guard let data = plyString.data(using: .utf8) else {
+            throw NSError(domain: "ExportError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to encode PLY data"])
+        }
+        return data
     }
     
     // Share the file using system share sheet
@@ -272,16 +341,13 @@ struct ExportOptionsSheet: View {
         let fileName = "prosthetic_scan.\(selectedFormat.fileExtension)"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
         
-        // Write data to the temporary file
         try? data.write(to: url)
         
-        // Create a UIActivityViewController to share the file
         let activityViewController = UIActivityViewController(
             activityItems: [url],
             applicationActivities: nil
         )
         
-        // Present the view controller
         if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
            let rootViewController = windowScene.windows.first?.rootViewController {
             rootViewController.present(activityViewController, animated: true, completion: nil)
@@ -292,14 +358,14 @@ struct ExportOptionsSheet: View {
 // UTType extensions for 3D file formats
 extension UTType {
     static var obj: UTType {
-        UTType(filenameExtension: "obj")!
+        UTType(filenameExtension: "obj") ?? .plainText
     }
     
     static var stl: UTType {
-        UTType(filenameExtension: "stl")!
+        UTType(filenameExtension: "stl") ?? .plainText
     }
     
     static var ply: UTType {
-        UTType(filenameExtension: "ply")!
+        UTType(filenameExtension: "ply") ?? .plainText
     }
 }
