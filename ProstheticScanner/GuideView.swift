@@ -8,6 +8,7 @@ struct GuideView: View {
             Text("3D Prosthetic Scanner")
                 .font(.largeTitle)
                 .fontWeight(.bold)
+                .multilineTextAlignment(.center)
             
             Image(systemName: "scanner.fill")
                 .font(.system(size: 60))
@@ -25,6 +26,7 @@ struct GuideView: View {
             .cornerRadius(10)
             
             Button(action: {
+                // This will close the guide and trigger scanning
                 showGuide = false
             }) {
                 Text("Start Scanning")
@@ -65,10 +67,10 @@ struct GuideStep: View {
     }
 }
 
-// Preview provider for testing in Xcode
 struct GuideView_Previews: PreviewProvider {
     static var previews: some View {
         GuideView(showGuide: .constant(true))
             .preferredColorScheme(.dark)
+            .previewLayout(.sizeThatFits)
     }
 }

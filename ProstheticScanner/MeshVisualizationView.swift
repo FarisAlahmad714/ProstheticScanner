@@ -35,7 +35,7 @@ struct MeshVisualizationView: View {
         GeometryReader { geometry in
             ZStack {
                 // SceneKit view for mesh rendering
-                SceneKitMeshView(
+                SimpleMeshView(
                     meshData: meshData,
                     rotation: $rotation,
                     scale: $scale,
@@ -149,7 +149,7 @@ struct MeshVisualizationView: View {
                 }
             }
             .sheet(isPresented: $showExportSheet) {
-                ExportOptionsSheet(onExport: onExport)
+                ExportOptionsSheet(meshData: meshData, onExport: onExport)
             }
             .alert("Error", isPresented: $showingError) {
                 Button("OK", role: .cancel) { }
@@ -170,8 +170,8 @@ struct MeshVisualizationView: View {
     }
 }
 
-// SceneKit renderer for the mesh
-struct SceneKitMeshView: UIViewRepresentable {
+// Simplified SceneKit renderer for the mesh
+struct SimpleMeshView: UIViewRepresentable {
     let meshData: MeshData
     @Binding var rotation: Float
     @Binding var scale: Float
@@ -196,95 +196,115 @@ struct SceneKitMeshView: UIViewRepresentable {
             updateCamera(cameraNode)
         }
         
-        // Update mesh material based on display mode
-        if let meshNode = uiView.scene?.rootNode.childNode(withName: "mesh", recursively: true),
-           let geometry = meshNode.geometry {
-            updateMaterialForDisplayMode(geometry)
+        // Update mesh node
+        if let meshNode = uiView.scene?.rootNode.childNode(withName: "mesh", recursively: true) {
+            // Update scale
+            meshNode.scale = SCNVector3(scale, scale, scale)
+            
+            // Update material based on display mode
+            if let geometry = meshNode.geometry,
+               let material = geometry.firstMaterial {
+                updateMaterial(material)
+            }
         }
     }
     
     private func createScene() -> SCNScene {
         let scene = SCNScene()
         
-        // Create mesh geometry from mesh data
-        let vertices = meshData.vertices
-        let normals = meshData.normals
-        let indices = meshData.triangles
+        // Create geometry sources
+        let vertices = meshData.vertices.map { SCNVector3($0.x, $0.y, $0.z) }
+        let vertexSource = SCNGeometrySource(vertices: vertices)
         
-        let verticesSource = SCNGeometrySource(vertices: vertices.map { SCNVector3($0.x, $0.y, $0.z) })
-        
-        let normalsSource: SCNGeometrySource
-        if normals.count == vertices.count {
-            normalsSource = SCNGeometrySource(normals: normals.map { SCNVector3($0.x, $0.y, $0.z) })
+        // Use normals if available, or create default ones
+        let normals: [SCNVector3]
+        if meshData.normals.count == meshData.vertices.count {
+            normals = meshData.normals.map { SCNVector3($0.x, $0.y, $0.z) }
         } else {
-            // Generate default normals if they don't exist
-            normalsSource = SCNGeometrySource(normals: [SCNVector3](repeating: SCNVector3(0, 1, 0), count: vertices.count))
+            normals = Array(repeating: SCNVector3(0, 1, 0), count: meshData.vertices.count)
         }
+        let normalSource = SCNGeometrySource(normals: normals)
         
-        let indicesData = Data(bytes: indices, count: indices.count * MemoryLayout<UInt32>.stride)
-        let indexElement = SCNGeometryElement(data: indicesData,
-                                            primitiveType: .triangles,
-                                            primitiveCount: indices.count / 3,
-                                            bytesPerIndex: MemoryLayout<UInt32>.stride)
+        // Create geometry element
+        let indices = meshData.triangles
+        let data = Data(bytes: indices, count: indices.count * MemoryLayout<UInt32>.size)
+        let element = SCNGeometryElement(
+            data: data,
+            primitiveType: .triangles,
+            primitiveCount: indices.count / 3,
+            bytesPerIndex: MemoryLayout<UInt32>.size
+        )
         
-        let geometry = SCNGeometry(sources: [verticesSource, normalsSource], elements: [indexElement])
+        // Create geometry
+        let geometry = SCNGeometry(sources: [vertexSource, normalSource], elements: [element])
         
-        // Apply default material
+        // Create material
         let material = SCNMaterial()
         material.diffuse.contents = UIColor.blue
         material.specular.contents = UIColor.white
         material.shininess = 0.5
         geometry.firstMaterial = material
         
-        // Create node for the mesh
+        // Create mesh node
         let meshNode = SCNNode(geometry: geometry)
         meshNode.name = "mesh"
         
-        // Center the mesh based on its bounds
-        let (min, max) = geometry.boundingBox
-        let center = SCNVector3((min.x + max.x) / 2, (min.y + max.y) / 2, (min.z + max.z) / 2)
+        // Center the mesh
+        let boundingBox = calculateBoundingBox(vertices: meshData.vertices)
+        let center = SCNVector3(
+            (boundingBox.min.x + boundingBox.max.x) / 2,
+            (boundingBox.min.y + boundingBox.max.y) / 2,
+            (boundingBox.min.z + boundingBox.max.z) / 2
+        )
         meshNode.position = SCNVector3(-center.x, -center.y, -center.z)
         
-        // Add mesh to the scene
         scene.rootNode.addChildNode(meshNode)
         
-        // Create and position the camera
-        let cameraNode = SCNNode()
-        cameraNode.name = "camera"
-        cameraNode.camera = SCNCamera()
-        cameraNode.position = SCNVector3(0, 0, cameraDistance)
+        // Create camera
+        let camera = SCNCamera()
+        camera.zNear = 0.1
+        camera.zFar = 100
         
-        // Add camera to the scene
+        let cameraNode = SCNNode()
+        cameraNode.camera = camera
+        cameraNode.position = SCNVector3(0, 0, cameraDistance)
+        cameraNode.name = "camera"
+        
         scene.rootNode.addChildNode(cameraNode)
         
         return scene
     }
     
+    private func calculateBoundingBox(vertices: [SIMD3<Float>]) -> (min: SIMD3<Float>, max: SIMD3<Float>) {
+        var minBounds = SIMD3<Float>(Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude)
+        var maxBounds = SIMD3<Float>(-Float.greatestFiniteMagnitude, -Float.greatestFiniteMagnitude, -Float.greatestFiniteMagnitude)
+        
+        for vertex in vertices {
+            minBounds = min(minBounds, vertex)
+            maxBounds = max(maxBounds, vertex)
+        }
+        
+        return (minBounds, maxBounds)
+    }
+    
     private func updateCamera(_ cameraNode: SCNNode) {
-        // Calculate camera position based on distance and angles
+        // Calculate camera position based on spherical coordinates
         let x = cameraDistance * sin(cameraAngleY) * cos(cameraAngleX)
         let y = cameraDistance * sin(cameraAngleX)
         let z = cameraDistance * cos(cameraAngleY) * cos(cameraAngleX)
         
-        // Apply rotation and scale
+        // Update camera position
         cameraNode.position = SCNVector3(x, y, z)
-        cameraNode.look(at: SCNVector3(0, 0, 0))
         
-        // Update mesh node scale if needed
-        if let meshNode = cameraNode.parent?.childNode(withName: "mesh", recursively: true) {
-            meshNode.scale = SCNVector3(scale, scale, scale)
-        }
+        // Make camera look at the center
+        cameraNode.look(at: SCNVector3(0, 0, 0))
     }
     
-    private func updateMaterialForDisplayMode(_ geometry: SCNGeometry) {
-        guard let material = geometry.firstMaterial else { return }
-        
+    private func updateMaterial(_ material: SCNMaterial) {
         switch displayMode {
         case .shaded:
             material.diffuse.contents = UIColor.blue
-            material.specular.contents = UIColor.white
             material.lightingModel = .blinn
-            material.fillMode = .fill
             
         case .wireframe:
             material.diffuse.contents = UIColor.white
@@ -294,83 +314,6 @@ struct SceneKitMeshView: UIViewRepresentable {
         case .points:
             material.diffuse.contents = UIColor.yellow
             material.lightingModel = .constant
-            material.fillMode = .fill
-            
-            // Change element primitive type to points
-            if let element = geometry.elements.first {
-                element.primitiveType = .points
-            }
-        }
-    }
-}
-
-// Export options sheet
-struct ExportOptionsSheet: View {
-    let onExport: () -> Void
-    @Environment(\.dismiss) var dismiss
-    @State private var selectedFormat: ExportFormat = .obj
-    @State private var includeTextures: Bool = true
-    @State private var optimizeMesh: Bool = true
-    
-    enum ExportFormat: String, CaseIterable, Identifiable {
-        case obj = "OBJ File"
-        case stl = "STL File"
-        case ply = "PLY File"
-        
-        var id: String { self.rawValue }
-        
-        var fileExtension: String {
-            switch self {
-            case .obj: return "obj"
-            case .stl: return "stl"
-            case .ply: return "ply"
-            }
-        }
-        
-        var icon: String {
-            switch self {
-            case .obj: return "doc.text"
-            case .stl: return "cube"
-            case .ply: return "square.3.stack.3d"
-            }
-        }
-    }
-    
-    var body: some View {
-        NavigationView {
-            List {
-                Section(header: Text("Export Format")) {
-                    ForEach(ExportFormat.allCases) { format in
-                        Button(action: {
-                            selectedFormat = format
-                            onExport()
-                            dismiss()
-                        }) {
-                            Label {
-                                Text(format.rawValue)
-                            } icon: {
-                                Image(systemName: format.icon)
-                            }
-                        }
-                    }
-                }
-                
-                Section(header: Text("Options")) {
-                    Toggle("Include Textures", isOn: $includeTextures)
-                    Toggle("Optimize Mesh", isOn: $optimizeMesh)
-                    
-                    HStack {
-                        Text("Estimated File Size")
-                        Spacer()
-                        Text("1.2 MB") // Placeholder - would be calculated in real app
-                            .foregroundColor(.secondary)
-                    }
-                }
-            }
-            .navigationTitle("Export Mesh")
-            .navigationBarItems(trailing: Button("Cancel") {
-                dismiss()
-            })
         }
     }
 }

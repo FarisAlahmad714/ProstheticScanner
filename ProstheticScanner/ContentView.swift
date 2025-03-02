@@ -37,6 +37,22 @@ struct ContentView: View {
         } message: {
             Text(errorMessage)
         }
+        .onAppear {
+            // Request camera permissions when app loads
+            requestCameraPermission()
+        }
+    }
+    
+    // Request camera permission explicitly
+    private func requestCameraPermission() {
+        AVCaptureDevice.requestAccess(for: .video) { granted in
+            // This triggers the system permission dialog
+            if !granted {
+                DispatchQueue.main.async {
+                    self.showError("Camera access is required for scanning")
+                }
+            }
+        }
     }
     
     // Main content based on current screen
@@ -44,12 +60,15 @@ struct ContentView: View {
         Group {
             switch currentScreen {
             case .guide:
-                GuideView(showGuide: .constant(true))
-                    .transition(.opacity)
-                    .onAppear {
-                        // Reset scanning state when returning to guide
-                        scanningManager.reset()
-                    }
+                GuideView(showGuide: Binding(
+                    get: { true },
+                    set: { _ in startScanning() }
+                ))
+                .transition(.opacity)
+                .onAppear {
+                    // Reset scanning state when returning to guide
+                    scanningManager.reset()
+                }
                 
             case .scanning:
                 scanningView
@@ -67,30 +86,44 @@ struct ContentView: View {
         .animation(.default, value: currentScreen)
     }
     
+    // Start the scanning process
+    private func startScanning() {
+        currentScreen = .scanning
+        // Add a slight delay to ensure view transition is complete
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            scanningManager.startScanning()
+        }
+    }
+    
     // View for active scanning
     private var scanningView: some View {
         VStack {
-            // AR scanning view would be here
-            ZStack {
-                // This is a placeholder - in a real app, you'd use ARViewContainer
-                Rectangle()
-                    .fill(Color.black.opacity(0.8))
-                    .aspectRatio(4/3, contentMode: .fit)
-                    .cornerRadius(12)
-                
-                VStack {
-                    Text("Move device around the object")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                    
-                    Text("\(scanningManager.pointCount) points captured")
-                        .foregroundColor(.white)
-                    
-                    ProgressView(value: scanningManager.progress)
-                        .progressViewStyle(LinearProgressViewStyle())
-                        .padding()
-                }
-            }
+            // AR View for scanning
+            ARViewContainer()
+                .frame(maxWidth: .infinity, maxHeight: 400)
+                .background(Color.black)
+                .cornerRadius(12)
+                .overlay(
+                    VStack {
+                        Text("Move device around the object")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .padding(.top, 20)
+                        
+                        Spacer()
+                        
+                        VStack(spacing: 10) {
+                            Text("\(scanningManager.pointCount) points captured")
+                                .foregroundColor(.white)
+                            
+                            ProgressView(value: scanningManager.progress)
+                                .progressViewStyle(LinearProgressViewStyle())
+                                .padding(.horizontal, 40)
+                                .padding(.bottom, 20)
+                        }
+                        .background(Color.black.opacity(0.4))
+                    }
+                )
             
             Text(scanningManager.statusMessage)
                 .padding()
@@ -237,7 +270,7 @@ struct ContentView: View {
                     scanningManager.meshData = meshData
                     currentScreen = .meshView
                 case .failure(let error):
-                    showError("Processing failed: \(error.localizedDescription)")
+                    showError("Processing failed: \(error)")
                     currentScreen = .guide
                 }
             }
@@ -258,7 +291,8 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Preview Provider
+import AVFoundation
+
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
         ContentView()
