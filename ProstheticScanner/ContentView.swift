@@ -23,14 +23,20 @@ struct ContentView: View {
                 Button(action: {
                     scanningManager.stopScanning()
                     currentScreen = .processing
-                    MeshProcessor.shared.processScanData(scanningManager.scanData) { result in
-                        switch result {
-                        case .success(let meshData):
-                            scanningManager.meshData = meshData
-                            currentScreen = .meshView
-                        case .failure(let error):
-                            print("Processing failed: \(error)")
-                            currentScreen = .guide // Fallback on error
+                    
+                    // Process the scan data
+                    DispatchQueue.main.async {
+                        MeshProcessor.shared.processScanData(scanningManager.scanData) { result in
+                            DispatchQueue.main.async {
+                                switch result {
+                                case .success(let meshData):
+                                    scanningManager.meshData = meshData
+                                    currentScreen = .meshView
+                                case .failure(let error):
+                                    print("Processing failed: \(error)")
+                                    currentScreen = .guide // Fallback on error
+                                }
+                            }
                         }
                     }
                 }) {

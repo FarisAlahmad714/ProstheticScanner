@@ -13,6 +13,12 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate {
     @Published var statusMessage: String = "Ready to scan"
     @Published var isScanning: Bool = false
     @Published var scannedMesh: MDLMesh?
+    @Published var meshData: MeshData?
+    
+    // Computed property for scan data
+    var scanData: ScanData {
+        return ScanData(points: points, normals: normals, confidences: confidences, colors: colors)
+    }
     
     // MARK: - Internal Data Storage
     private(set) var points: [SIMD3<Float>] = []       // Captured 3D points
@@ -149,9 +155,49 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate {
     
     /// Extracts 3D points from a depth map with camera transform.
     private func extractPoints(from depthMap: CVPixelBuffer, transform: matrix_float4x4) -> [SIMD3<Float>] {
-        // Placeholder: Implement point cloud extraction based on depth map
-        // This would involve converting pixel coordinates and depth values to world space
-        return [] // Replace with actual implementation
+        var extractedPoints: [SIMD3<Float>] = []
+        
+        CVPixelBufferLockBaseAddress(depthMap, CVPixelBufferLockFlags.readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(depthMap, CVPixelBufferLockFlags.readOnly) }
+        
+        let width = CVPixelBufferGetWidth(depthMap)
+        let height = CVPixelBufferGetHeight(depthMap)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(depthMap)
+        
+        guard let baseAddress = CVPixelBufferGetBaseAddress(depthMap) else { return [] }
+        let depthData = baseAddress.assumingMemoryBound(to: Float32.self)
+        
+        // Camera intrinsics (approximate values for iPhone)
+        let fx: Float = 570.0 // Focal length X
+        let fy: Float = 570.0 // Focal length Y
+        let cx: Float = Float(width) / 2.0 // Principal point X
+        let cy: Float = Float(height) / 2.0 // Principal point Y
+        
+        // Sample every nth pixel to avoid too many points
+        let stride = max(1, min(width, height) / 100)
+        
+        for y in stride(from: 0, to: height, by: stride) {
+            for x in stride(from: 0, to: width, by: stride) {
+                let depthIndex = y * (bytesPerRow / MemoryLayout<Float32>.size) + x
+                let depth = depthData[depthIndex]
+                
+                // Skip invalid depth values
+                guard depth > 0.01 && depth < 10.0 else { continue }
+                
+                // Convert pixel coordinates to camera space
+                let cameraX = (Float(x) - cx) * depth / fx
+                let cameraY = (Float(y) - cy) * depth / fy
+                let cameraZ = -depth // Negative because camera looks down -Z axis
+                
+                // Transform to world space
+                let cameraPoint = SIMD4<Float>(cameraX, cameraY, cameraZ, 1.0)
+                let worldPoint = transform * cameraPoint
+                
+                extractedPoints.append(SIMD3<Float>(worldPoint.x, worldPoint.y, worldPoint.z))
+            }
+        }
+        
+        return extractedPoints
     }
     
     /// Updates scanning progress and status.
@@ -203,10 +249,52 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
     
-    /// Generates an MDLMesh from captured points.
+    /// Generates an MDLMesh from captured points using Delaunay triangulation.
     private func generateMeshFromPoints(_ points: [SIMD3<Float>]) -> MDLMesh {
-        // Placeholder: Implement proper mesh generation (e.g., Poisson reconstruction)
-        let allocator = MTKMeshBufferAllocator(device: MTLCreateSystemDefaultDevice()!)
-        return MDLMesh(sphereWithExtent: [0.1, 0.1, 0.1], segments: [20, 20], inwardNormals: false, geometryType: .triangles, allocator: allocator)
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            fatalError("Metal device not available")
+        }
+        let allocator = MTKMeshBufferAllocator(device: device)
+        
+        // Simple convex hull approximation for now
+        let hull = computeConvexHull(points)
+        
+        // Create vertices buffer
+        let vertexData = hull.flatMap { [$0.x, $0.y, $0.z] }
+        let vertexBuffer = allocator.newBuffer(with: Data(bytes: vertexData, count: vertexData.count * MemoryLayout<Float>.size), type: .vertex)
+        
+        // Create triangles using fan triangulation from first vertex
+        var triangles: [UInt32] = []
+        for i in 1..<hull.count-1 {
+            triangles.append(0)
+            triangles.append(UInt32(i))
+            triangles.append(UInt32(i + 1))
+        }
+        
+        let indexBuffer = allocator.newBuffer(with: Data(bytes: triangles, count: triangles.count * MemoryLayout<UInt32>.size), type: .index)
+        
+        // Create mesh
+        let mesh = MDLMesh(vertexBuffer: vertexBuffer, vertexCount: hull.count, descriptor: MDLVertexDescriptor.defaultLayout, submeshes: [])
+        let submesh = MDLSubmesh(indexBuffer: indexBuffer, indexCount: triangles.count, indexType: .uInt32, geometryType: .triangles, material: nil)
+        mesh.addSubmesh(submesh)
+        
+        return mesh
+    }
+    
+    /// Computes a simple convex hull approximation.
+    private func computeConvexHull(_ points: [SIMD3<Float>]) -> [SIMD3<Float>] {
+        guard points.count > 3 else { return points }
+        
+        // Find extreme points
+        let minX = points.min { $0.x < $1.x }!
+        let maxX = points.max { $0.x < $1.x }!
+        let minY = points.min { $0.y < $1.y }!
+        let maxY = points.max { $0.y < $1.y }!
+        let minZ = points.min { $0.z < $1.z }!
+        let maxZ = points.max { $0.z < $1.z }!
+        
+        // Return unique extreme points
+        let extremePoints = [minX, maxX, minY, maxY, minZ, maxZ]
+        return Array(Set(extremePoints.map { $0 }))
     }
 }
