@@ -370,6 +370,51 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate {
         return normalize(rotationMatrix * normal)
     }
     
+    /// Process a mesh anchor for visualization - simplified and crash-safe
+    private func processMeshAnchor(_ meshAnchor: ARMeshAnchor) {
+        guard let arView = arView else { return }
+        
+        // Create a simple visual representation instead of complex mesh processing
+        // This avoids memory access crashes while still showing mesh areas
+        let material = SimpleMaterial(
+            color: .blue.withAlphaComponent(0.3),
+            roughness: 0.5,
+            isMetallic: false
+        )
+        
+        // Create a simple box at the mesh anchor location
+        let meshBox = MeshResource.generateBox(size: 0.05) // Small 5cm box
+        let meshEntity = ModelEntity(mesh: meshBox, materials: [material])
+        
+        // Position at the anchor's transform
+        let anchorEntity = AnchorEntity(world: meshAnchor.transform)
+        anchorEntity.addChild(meshEntity)
+        arView.scene.addAnchor(anchorEntity)
+        
+        // Store references
+        meshAnchors.append(meshAnchor)
+        meshEntities.append(meshEntity)
+        
+        // Extract points safely from the mesh for our point cloud
+        extractPointsFromMeshAnchorSafely(meshAnchor)
+    }
+    
+    /// Updates an existing mesh anchor visualization - simplified to avoid crashes
+    private func updateMeshAnchor(_ meshAnchor: ARMeshAnchor) {
+        guard let index = meshAnchors.firstIndex(where: { $0.identifier == meshAnchor.identifier }),
+              index < meshEntities.count else {
+            return
+        }
+        
+        // Simply update the transform - no mesh geometry processing
+        if let anchorEntity = meshEntities[index].parent as? AnchorEntity {
+            anchorEntity.transform = Transform(matrix: meshAnchor.transform)
+        }
+        
+        // Update our point cloud with new mesh data (safely)
+        extractPointsFromMeshAnchorSafely(meshAnchor)
+    }
+    
     // Removed createMeshResource method - was causing EXC_BAD_ACCESS crashes
     // The mesh anchor processing is now simplified to avoid raw buffer access
     
@@ -417,51 +462,6 @@ class ScanningManager: NSObject, ObservableObject, ARSessionDelegate {
             self.confidences.append(contentsOf: newConfidences)
             self.pointCount = self.points.count
         }
-    }
-    
-    /// Process a mesh anchor for visualization - simplified and crash-safe
-    private func processMeshAnchor(_ meshAnchor: ARMeshAnchor) {
-        guard let arView = arView else { return }
-        
-        // Create a simple visual representation instead of complex mesh processing
-        // This avoids memory access crashes while still showing mesh areas
-        let material = SimpleMaterial(
-            color: .blue.withAlphaComponent(0.3),
-            roughness: 0.5,
-            isMetallic: false
-        )
-        
-        // Create a simple box at the mesh anchor location
-        let meshBox = MeshResource.generateBox(size: 0.05) // Small 5cm box
-        let meshEntity = ModelEntity(mesh: meshBox, materials: [material])
-        
-        // Position at the anchor's transform
-        let anchorEntity = AnchorEntity(world: meshAnchor.transform)
-        anchorEntity.addChild(meshEntity)
-        arView.scene.addAnchor(anchorEntity)
-        
-        // Store references
-        meshAnchors.append(meshAnchor)
-        meshEntities.append(meshEntity)
-        
-        // Extract points safely from the mesh for our point cloud
-        extractPointsFromMeshAnchorSafely(meshAnchor)
-    }
-    
-    /// Updates an existing mesh anchor visualization - simplified to avoid crashes
-    private func updateMeshAnchor(_ meshAnchor: ARMeshAnchor) {
-        guard let index = meshAnchors.firstIndex(where: { $0.identifier == meshAnchor.identifier }),
-              index < meshEntities.count else {
-            return
-        }
-        
-        // Simply update the transform - no mesh geometry processing
-        if let anchorEntity = meshEntities[index].parent as? AnchorEntity {
-            anchorEntity.transform = Transform(matrix: meshAnchor.transform)
-        }
-        
-        // Update our point cloud with new mesh data (safely)
-        extractPointsFromMeshAnchorSafely(meshAnchor)
     }
     
     /// Updates scanning progress based on point count
@@ -810,4 +810,3 @@ extension Array {
         return self[index]
     }
 }
-		
