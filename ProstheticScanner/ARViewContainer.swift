@@ -4,7 +4,7 @@ import ARKit
 import Combine
 
 // Container for AR view that integrates with ScanningManager
-struct ARViewContainer: UIViewRepresentable {
+struct ARViewContainer: UIViewRepresentable {  
     @ObservedObject var scanningManager = ScanningManager.shared
 
     func makeUIView(context: Context) -> ARView {

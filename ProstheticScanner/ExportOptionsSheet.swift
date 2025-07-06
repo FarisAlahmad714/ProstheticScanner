@@ -260,10 +260,10 @@ struct ExportOptionsSheet: View {
             objString += "vn \(normal.x) \(normal.y) \(normal.z)\n"
         }
         
-        for i in stride(from: 0, to: meshData.triangles.count, by: 3) {
-            let idx1 = meshData.triangles[i] + 1
-            let idx2 = meshData.triangles[i + 1] + 1
-            let idx3 = meshData.triangles[i + 2] + 1
+        for triangle in meshData.triangles {
+            let idx1 = triangle.x &+ 1
+            let idx2 = triangle.y &+ 1
+            let idx3 = triangle.z &+ 1
             objString += "f \(idx1)//\(idx1) \(idx2)//\(idx2) \(idx3)//\(idx3)\n"
         }
         
@@ -279,15 +279,17 @@ struct ExportOptionsSheet: View {
         let header = "ProstheticScanner STL Export" + String(repeating: " ", count: 80 - 25)
         stlData.append(Data(header.utf8))
         
-        let triangleCount = UInt32(meshData.triangles.count / 3)
+        let triangleCount = UInt32(meshData.triangles.count)
         withUnsafeBytes(of: triangleCount.littleEndian) { stlData.append(contentsOf: $0) }
         
-        for i in stride(from: 0, to: meshData.triangles.count, by: 3) {
-            let v1 = meshData.vertices[Int(meshData.triangles[i])]
-            let v2 = meshData.vertices[Int(meshData.triangles[i + 1])]
-            let v3 = meshData.vertices[Int(meshData.triangles[i + 2])]
+        for triangle in meshData.triangles {
+            let v1 = meshData.vertices[Int(triangle.x)]
+            let v2 = meshData.vertices[Int(triangle.y)]
+            let v3 = meshData.vertices[Int(triangle.z)]
             
-            let normal = normalize(cross(v2 - v1, v3 - v1))
+            let edge1 = v2 - v1
+            let edge2 = v3 - v1
+            let normal = normalize(simd_cross(edge1, edge2))
             
             stlData.append(floatToLittleEndian(normal.x))
             stlData.append(floatToLittleEndian(normal.y))
@@ -320,18 +322,15 @@ struct ExportOptionsSheet: View {
         var plyString = "ply\nformat ascii 1.0\n"
         plyString += "element vertex \(meshData.vertices.count)\n"
         plyString += "property float x\nproperty float y\nproperty float z\n"
-        plyString += "element face \(meshData.triangles.count / 3)\n"
+        plyString += "element face \(meshData.triangles.count)\n"
         plyString += "property list uchar int vertex_indices\nend_header\n"
         
         for vertex in meshData.vertices {
             plyString += "\(vertex.x) \(vertex.y) \(vertex.z)\n"
         }
         
-        for i in stride(from: 0, to: meshData.triangles.count, by: 3) {
-            let idx1 = meshData.triangles[i]
-            let idx2 = meshData.triangles[i + 1]
-            let idx3 = meshData.triangles[i + 2]
-            plyString += "3 \(idx1) \(idx2) \(idx3)\n"
+        for triangle in meshData.triangles {
+            plyString += "3 \(triangle.x) \(triangle.y) \(triangle.z)\n"
         }
         
         guard let data = plyString.data(using: .utf8) else {

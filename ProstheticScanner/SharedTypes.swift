@@ -21,7 +21,9 @@ struct ScanData {
 struct MeshData {
     let vertices: [SIMD3<Float>]
     let normals: [SIMD3<Float>]
-    let triangles: [UInt32]
+    let colors: [SIMD3<Float>]
+    let triangles: [SIMD3<UInt32>]
+    let bounds: (min: SIMD3<Float>, max: SIMD3<Float>)
 }
 
 /// Represents surface data used in processing.
